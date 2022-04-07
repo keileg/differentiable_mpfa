@@ -11,11 +11,18 @@ import scipy.sparse.linalg as spla
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
-from pypardiso import spsolve as pardisosolve
 
-nsteps = 5
-use_ad = 1==1
-g1 = pp.CartGrid([15], physdims=[1])
+try:
+    from pypardiso import spsolve as pardisosolve
+
+    has_pardiso = True
+except:
+    has_pardiso = False
+
+
+nsteps = 15
+use_ad = 1 == 0
+g1 = pp.CartGrid([150], physdims=[1])
 gb = pp.GridBucket()
 gb.add_nodes([g1])
 gb.assign_node_ordering()
@@ -162,6 +169,9 @@ else:
     eq = eq_non_ad
 flux_tpfa.discretize(gb)
 errors = []
+
+residuals = []
+
 for i in range(nsteps):
     for g, d in gb:
         p_loc = dof_manager.assemble_variable([g], variable, from_iterate=True)[
@@ -176,27 +186,51 @@ for i in range(nsteps):
     flux_tpfa.discretize(gb)
     arr = eq.evaluate(dof_manager)
     A, b = arr.jac, arr.val
-    dx = pardisosolve(A, -b)
+
+    residuals.append(np.linalg.norm(b))
+
+    if has_pardiso:
+        dx = pardisosolve(A, -b)
+    else:
+        dx = spla.spsolve(A, -b)
     dof_manager.distribute_variable(dx, grid_list, to_iterate=True, additive=True)
     print(f"b {np.linalg.norm(b)} and dx {np.linalg.norm(dx)}")
     p_num = dof_manager.assemble_variable(grid_list, from_iterate=True)
     errors.append(np.linalg.norm(p_num - p_analytical(x)))
 
 p_num = dof_manager.assemble_variable(grid_list, from_iterate=True)
-print("Use ad:", use_ad, "\nNorm of p_numerical - p_analytical:", np.linalg.norm(p_num-p_analytical(x)))
+print(
+    "Use ad:",
+    use_ad,
+    "\nNorm of p_numerical - p_analytical:",
+    np.linalg.norm(p_num - p_analytical(x)),
+)
 if use_ad:
     errors_ad = errors.copy()
+    residuals_ad = residuals.copy()
 else:
     errors_non_ad = errors.copy()
-def plot(e, e_ad, nsteps):
-    es = np.vstack((e, e_ad))
+    residuals_non_ad = residuals.copy()
+
+
+def plot(e, e_ad, nsteps, title):
     iters = np.arange(nsteps)
+    plt.figure()
     plt.semilogy(iters, e, label="non ad")
     plt.semilogy(iters, e_ad, label="ad")
     ax = plt.gca()
     ax.set_xlabel("Iteration")
     ax.set_ylabel("Error (not normalized)")
     plt.legend()
+    plt.title(title)
+
+
 if "errors_ad" in locals() and "errors_non_ad" in locals():
     plt.close("all")
-    plot(errors_non_ad, errors_ad, nsteps)
+    plot(
+        errors_non_ad, errors_ad, nsteps, title="Error compared to analytical solution"
+    )
+
+if "residuals_ad" in locals() and "residuals_non_ad" in locals():
+    plt.close("all")
+    plot(residuals_non_ad, residuals_ad, nsteps, title="Non-linear residual")
