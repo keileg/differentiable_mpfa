@@ -8,9 +8,9 @@ matplotlib.use("Qt5Agg")
 def plot_convergence(m_nonlin, m_lin, plot_errors=False):
     iters = np.arange(len(m_lin._residuals))
     iters_nonl = np.arange(len(m_nonlin._residuals))
-
-    plt.semilogy(iters, m_lin._residuals, label="linear")
-    plt.semilogy(iters_nonl, m_nonlin._residuals, label="nonlinear")
+    suffix = m_lin.params["file_name"]
+    plt.semilogy(iters, m_lin._residuals, label="linear "+suffix)
+    plt.semilogy(iters_nonl, m_nonlin._residuals, label="nonlinear "+suffix)
     ax = plt.gca()
     ax.set_xlabel("Iteration")
     ax.set_ylabel("Residual norm")
@@ -18,6 +18,7 @@ def plot_convergence(m_nonlin, m_lin, plot_errors=False):
     # order = 1
     # annotation.slope_marker((iters[2], 0.8 * m_nonlin._residuals[4]), (-1 - order), ax=ax, invert=True, size_frac=1/nsteps)
     plt.legend()
+    plt.savefig(fname="residuals_" + m_nonlin.params["plotting_file_name"])
     if plot_errors:
         plt.figure()
         p_analytical = m_nonlin.p_analytical()
@@ -30,4 +31,4 @@ def plot_convergence(m_nonlin, m_lin, plot_errors=False):
         ax.set_xlabel("Iteration")
         ax.set_ylabel("Error (not normalized)")
         plt.legend()
-    plt.show()
+    # plt.show()

@@ -1,5 +1,6 @@
 import porepy as pp
 import numpy as np
+import scipy.sparse as sps
 from typing import Dict
 from grids import one_dimensional_grid_bucket, two_dimensional_cartesian, two_dimensional_cartesian_perturbed
 from incompressible_flow_nonlinear_tpfa import NonlinearIncompressibleFlow
@@ -26,11 +27,14 @@ class SquareRootPermeability:
         return x * (1 - x)
 
     def _permeability_function(self, pressure: pp.ad.Variable):
-        val = sqrt(pressure + 1)
+        k0 = self.params["k0"]
+        val = sqrt(pressure + k0)
         return val
 
     def _permeability_function_ad(self, pressure: pp.ad.Variable):
-        val = sqrt(pressure + 1)
+        nc = pressure.val.size
+        k0 = pp.ad.Ad_array(self.params["k0"] * np.ones(nc), sps.csr_matrix((nc, self.dof_manager.num_dofs()), dtype=float))
+        val = sqrt(pressure + k0)
         return val
 
     def _initial_condition(self) -> None:
@@ -42,7 +46,7 @@ class SquareRootPermeability:
         self.dof_manager.distribute_variable(vals, to_iterate=True)
 
     def _initial_pressure(self, g):
-        # return .9 * np.ones(g.num_cells)
+        # return np.ones(g.num_cells)
         val = self.p_analytical(g) / (1.1 - np.random.rand(g.num_cells) / 5)
         return val
 
@@ -54,12 +58,10 @@ class SquareRootPermeability2d(SquareRootPermeability):
         """
         x = g.cell_centers[0]
         y = g.cell_centers[1]
-        val = (
-                -2*x*(1 - x)*sqrt(x*y*(1 - x)*(1 - y) + 1) - 2*y*(1 - y)*sqrt(x*y*(1 - x)*(1 - y) + 1)
-                + (-x*y*(1 - x) + x*(1 - x)*(1 - y))*(-x*y*(1 - x)/2 + x*(1 - x)*(1 - y)/2)/sqrt(x*y*(1 - x)*(1 - y) + 1)
-                + (-x*y*(1 - y) + y*(1 - x)*(1 - y))*(-x*y*(1 - y)/2 + y*(1 - x)*(1 - y)/2)/sqrt(x*y*(1 - x)*(1 - y) + 1)
-                )
-        return val * g.cell_volumes
+        k0 = self.params["k0"]
+        val = -2*x*(1 - x)*sqrt(k0 + x*y*(1 - x)*(1 - y)) - 2*y*(1 - y)*sqrt(k0 + x*y*(1 - x)*(1 - y)) + (-x*y*(1 - x) + x*(1 - x)*(1 - y))*(-x*y*(1 - x)/2 + x*(1 - x)*(1 - y)/2)/sqrt(k0 + x*y*(1 - x)*(1 - y)) + (-x*y*(1 - y) + y*(1 - x)*(1 - y))*(-x*y*(1 - y)/2 + y*(1 - x)*(1 - y)/2)/sqrt(k0 + x*y*(1 - x)*(1 - y))
+
+        return -val * g.cell_volumes
 
     def p_analytical(self, g=None):
         if g is None:
@@ -98,23 +100,70 @@ class SquarePermeability2d(SquareRootPermeability):
 
 class CombinedModel(SquareRootPermeability2d, NonlinearIncompressibleFlow):
     pass
-class CombinedModel(SquarePermeability2d, NonlinearIncompressibleFlow):
-    pass
+# class CombinedModel(SquarePermeability2d, NonlinearIncompressibleFlow):
+#     pass
+
+def run_linear_and_nonlinear(params: Dict, model_class) -> None:
+    """Run a pair of one linear and one nonlinear simulation.
+
+    Args:
+        params: Setup and run parameters
+        model_class: Model to be used for the simulations
+
+    Returns:
+        nonlinear_model, linear_model
+
+    """
+    params_linear = params.copy()
+    params_linear["use_linear_discretization"] = True
+    linear_model = model_class(params_linear)
+    pp.run_stationary_model(linear_model, params_linear)
+    params["file_name"] += "_nonlinear"
+    nonlinear_model = model_class(params)
+    pp.run_stationary_model(nonlinear_model, params)
+
+    plot_convergence(nonlinear_model, linear_model, plot_errors=False)
+    return nonlinear_model, linear_model
+
+def run_simulation_pairs_varying_parameters(params: Dict, update_params: Dict[str, Dict], model_class) -> None:
+    """Run multiple pairs of simulations varying some parameters.
+
+    Args:
+        params: Dictionary containing initial setup and run parameters
+        update_params: Dictionary with keys identifying each simulation pair and
+            values being dictionaries specifying the updates to the initial parameters.
+
+    Example usage:
+    The following parameters produce four simulations (linear + 100 cells,
+    nonlinear + 100 cells, linear + 4 cells and nonlinear + 4 cells):
+
+        params = {"foo": "bar", "grid_method": two_dimensional_cartesian, ...}
+        update_params = {"hundred_cells": {"n_cells": [10, 10]},
+                         "four_cells": {"n_cells": [2, 2]},
+                         }
+
+
+    """
+    for name, updates in update_params.items():
+        params.update(updates)
+        params["file_name"] = name
+        run_linear_and_nonlinear(params, model_class)
 if __name__ == "__main__":
     num_iterations = 10
     params = {
-        "use_tpfa": True,
+        "use_tpfa": False,
         "linear_solver": "pypardiso",
         "max_iterations": num_iterations,
         "nl_convergence_tol": 1e-10,
         "nl_divergence_tol": 1e5,
-        "grid_method": two_dimensional_cartesian_perturbed,
-        "n_cells": [5, 50],
+        "grid_method": two_dimensional_cartesian,
+        "n_cells": [100, 100],
+        "k0": 1e-3,
+        "plotting_file_name": "analytical_solution_mpfa_varying_cell_number"
     }
-    nonlinear_model = CombinedModel(params)
-    pp.run_stationary_model(nonlinear_model, params)
-    params_linear = params.copy()
-    params_linear["use_linear_discretization"] = True
-    linear_model = CombinedModel(params_linear)
-    pp.run_stationary_model(linear_model, params_linear)
-    plot_convergence(nonlinear_model, linear_model, plot_errors=True)
+    update_params = {
+        "100 cells": {"n_cells": [10, 10]},
+        "10000 cells": {"n_cells": [100, 100]},
+        "250000 cells": {"n_cells": [500, 500]},
+    }
+    run_simulation_pairs_varying_parameters(params, update_params, CombinedModel)
