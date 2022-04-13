@@ -28,3 +28,8 @@ def two_dimensional_cartesian_perturbed(params):
     g.nodes[1, internal_nodes] += np.random.rand(internal_nodes.sum()) * phys_dims[1] / n_cells[1] / 3
     gb: pp.GridBucket = pp.meshing._assemble_in_bucket([[g]])
     return gb, box
+
+def horizontal_fracture(params):
+    endpoints = params.get("fracture_endpoints", [0,1])
+    mesh_args = params.get("mesh_args", [2, 2])
+    return pp.grid_buckets_2d.single_horizontal(x_endpoints=endpoints, mesh_args=mesh_args, simplex=False)
