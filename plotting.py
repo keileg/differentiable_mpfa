@@ -5,12 +5,12 @@ import matplotlib.pyplot as plt
 
 matplotlib.use("Qt5Agg")
 
-def plot_convergence(m_nonlin, m_lin, plot_errors=False):
+def plot_convergence(m_nonlin, m_lin, line_style=None, plot_errors=False):
     iters = np.arange(len(m_lin._residuals))
     iters_nonl = np.arange(len(m_nonlin._residuals))
     suffix = m_lin.params["file_name"]
-    plt.semilogy(iters, m_lin._residuals, label="linear "+suffix)
-    plt.semilogy(iters_nonl, m_nonlin._residuals, label="nonlinear "+suffix)
+    plt.semilogy(iters, m_lin._residuals, label="linear "+suffix, ls=line_style)
+    plt.semilogy(iters_nonl, m_nonlin._residuals, label="nonlinear "+suffix, ls=line_style)
     ax = plt.gca()
     ax.set_xlabel("Iteration")
     ax.set_ylabel("Residual norm")

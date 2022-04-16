@@ -103,7 +103,7 @@ class CombinedModel(SquareRootPermeability2d, NonlinearIncompressibleFlow):
 # class CombinedModel(SquarePermeability2d, NonlinearIncompressibleFlow):
 #     pass
 
-def run_linear_and_nonlinear(params: Dict, model_class) -> None:
+def run_linear_and_nonlinear(params: Dict, model_class, plot_line_style=None) -> None:
     """Run a pair of one linear and one nonlinear simulation.
 
     Args:
@@ -122,7 +122,7 @@ def run_linear_and_nonlinear(params: Dict, model_class) -> None:
     nonlinear_model = model_class(params)
     pp.run_stationary_model(nonlinear_model, params)
 
-    plot_convergence(nonlinear_model, linear_model, plot_errors=False)
+    plot_convergence(nonlinear_model, linear_model, plot_errors=False, line_style=plot_line_style)
     return nonlinear_model, linear_model
 
 def run_simulation_pairs_varying_parameters(params: Dict, update_params: Dict[str, Dict], model_class) -> None:
@@ -144,10 +144,11 @@ def run_simulation_pairs_varying_parameters(params: Dict, update_params: Dict[st
 
 
     """
-    for name, updates in update_params.items():
+    line_styles = ["-", "-.", ":"]
+    for i, name, updates in enumerate(update_params.items()):
         params.update(updates)
         params["file_name"] = name
-        run_linear_and_nonlinear(params, model_class)
+        run_linear_and_nonlinear(params, model_class, line_styles[i])
 if __name__ == "__main__":
     num_iterations = 10
     params = {
@@ -159,11 +160,30 @@ if __name__ == "__main__":
         "grid_method": two_dimensional_cartesian,
         "n_cells": [100, 100],
         "k0": 1e-3,
-        "plotting_file_name": "analytical_solution_mpfa_varying_cell_number"
+        "plotting_file_name": "analytical_solution_mpfa_varying_cell_number",
     }
-    update_params = {
+
+    update_params_cell_number = {
         "100 cells": {"n_cells": [10, 10]},
-        "10000 cells": {"n_cells": [100, 100]},
-        "250000 cells": {"n_cells": [500, 500]},
+        "10k cells": {"n_cells": [100, 100]},
+        "250k cells": {"n_cells": [500, 500]},
     }
-    run_simulation_pairs_varying_parameters(params, update_params, CombinedModel)
+    update_params_mesh_type = {
+        "10k cells": {
+            "plotting_file_name": "analytical_solution_mpfa_mesh_types",
+            "n_cells": [100, 100]},
+        "simplex": {"simplex": True,
+                    "mesh_args": {"mesh_size_bound": 5e-3,  # 92562 at 5e-3.
+                                  "mesh_size_frac": 1e-5}},
+        "perturbed": {"simplex": False,
+                      "grid_method": two_dimensional_cartesian_perturbed},
+    }
+    update_params_anisotropy = {
+        "50 ycells": {
+            "plotting_file_name": "analytical_solution_mpfa_anisotropy",
+            "grid_method": two_dimensional_cartesian_perturbed,
+            "n_cells": [50, 50]},
+        "200 ycells": {"n_cells": [50, 200]},
+        "1000 ycells": {"n_cells": [50, 1000]},
+    }
+    run_simulation_pairs_varying_parameters(params, update_params_anisotropy, CombinedModel)

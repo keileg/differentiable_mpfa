@@ -11,12 +11,21 @@ def one_dimensional_grid_bucket(params):
     return gb, box
 
 def two_dimensional_cartesian(params):
+    if params.get("simplex", False):
+        domain = pp.grids.standard_grids.utils.unit_domain(2)
+        gb = pp.grids.standard_grids.utils.make_gb_2d_simplex(mesh_args=params["mesh_args"],
+                                                              points=None,
+                                                              edges=None,
+                                                              domain=domain)
+        return gb, domain
+
     phys_dims: List = params.get("phys_dims", [1, 1])
     n_cells: List = params.get("n_cells", [2, 2])
     box: Dict = pp.geometry.bounding_box.from_points(np.array([[0, 0], phys_dims]).T)
     g: pp.Grid = pp.CartGrid(n_cells, physdims=phys_dims)
     gb: pp.GridBucket = pp.meshing._assemble_in_bucket([[g]])
     return gb, box
+
 
 def two_dimensional_cartesian_perturbed(params):
     phys_dims: List = params.get("phys_dims", [1, 1])
