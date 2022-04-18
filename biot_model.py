@@ -2,8 +2,13 @@ import porepy as pp
 import numpy as np
 import scipy.sparse as sps
 from incompressible_flow_nonlinear_tpfa import CommonModel
+from analytical_models import run_simulation_pairs_varying_parameters
 from plotting import plot_convergence
-from grids import two_dimensional_cartesian, horizontal_fracture
+from grids import (
+    two_dimensional_cartesian,
+    horizontal_fracture_2d,
+    horizontal_fracture_3d,
+)
 from typing import List
 from functools import partial
 import logging
@@ -11,31 +16,26 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
 
+class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
     def _set_scalar_parameters(self) -> None:
         super()._set_scalar_parameters()
         self._bc_map = {}
         for g, d in self.gb:
             parameters = d[pp.PARAMETERS][self.scalar_parameter_key]
-            self._bc_map[g] = (parameters["bc"])  #, parameters["bc_values"])
-
-
+            self._bc_map[g] = parameters["bc"]  # , parameters["bc_values"])
 
     def _permeability(self, g: pp.Grid):
 
         val = 1e-5 * np.ones(g.num_cells)
 
         if g.dim == self._Nd - 1:
-
             d = self.gb.node_props(g)
             data_edge = self.gb.edge_props((g, self._nd_grid()))
             projection = d["tangential_normal_projection"]
-            u_local = self.reconstruct_local_displacement_jump(
-                data_edge, projection
-            )
+            u_local = self.reconstruct_local_displacement_jump(data_edge, projection)
             u_n = u_local[-1]
-            val += u_n ** 2
+            val += u_n**2
         return val
 
     def _initial_pressure(self, g):
@@ -46,17 +46,25 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
 
     def _permeability_function_ad(self, var: pp.ad.Ad_array):
         nc = self.gb.num_cells()
-        val = pp.ad.Ad_array(1e-5 * np.ones(nc), sps.csr_matrix((nc, self.dof_manager.num_dofs()), dtype=float))
+        val = pp.ad.Ad_array(
+            1e-5 * np.ones(nc),
+            sps.csr_matrix((nc, self.dof_manager.num_dofs()), dtype=float),
+        )
         fracture_subdomains: List[pp.Grid] = self.gb.grids_of_dimension(
             self._Nd - 1
         ).tolist()
-        u_n = (self._ad.normal_component_frac * self._displacement_jump(fracture_subdomains)).evaluate(self.dof_manager)
-        prol = self._ad.subdomain_projections_scalar.cell_prolongation(fracture_subdomains).evaluate(self.dof_manager)
+        u_n = (
+            self._ad.normal_component_frac
+            * self._displacement_jump(fracture_subdomains)
+        ).evaluate(self.dof_manager)
+        prol = self._ad.subdomain_projections_scalar.cell_prolongation(
+            fracture_subdomains
+        ).evaluate(self.dof_manager)
         u_n_squared = u_n.copy()
         u_n_squared.jac.data = 2 * u_n_squared.jac.data
         u_n_squared.jac = u_n_squared.diagvec_mul_jac(u_n.val)
-        u_n_squared.val = u_n.val ** 2
-        val = (val + (prol * (u_n * u_n)))
+        u_n_squared.val = u_n.val**2
+        val = val + (prol * (u_n * u_n))
 
         return val
 
@@ -67,7 +75,6 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
         else:
             base_discr = pp.ad.MpfaAd(self.scalar_parameter_key, subdomains)
         self._ad.flux_discretization = base_discr
-
 
         TPFA_function = pp.ad.Function(
             partial(
@@ -85,7 +92,9 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
         )
         p = self._ad.pressure
         u_j = self._ad.interface_displacement
-        perm_function = pp.ad.Function(self._permeability_function_ad, "perm_function_biot")
+        perm_function = pp.ad.Function(
+            self._permeability_function_ad, "perm_function_biot"
+        )
         flux_ad = TPFA_function(perm_function, u_j, p)
         self._ad.dummy_eq_for_discretization = base_discr.flux * p
 
@@ -100,31 +109,29 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
             grids=subdomains,
         )
         flux: pp.ad.Operator = (
-                flux_ad
-                + base_discr.bound_flux * bc_values
-                + base_discr.bound_flux
-                * self._ad.mortar_projections_scalar.mortar_to_primary_int
-                * self._ad.interface_flux
-                + base_discr.vector_source * vector_source_subdomains
+            flux_ad
+            + base_discr.bound_flux * bc_values
+            + base_discr.bound_flux
+            * self._ad.mortar_projections_scalar.mortar_to_primary_int
+            * self._ad.interface_flux
+            + base_discr.vector_source * vector_source_subdomains
         )
         if self.params.get("use_linear_discretization", False):
             return super()._fluid_flux(subdomains)
         return flux
 
     def _bc_values_scalar(self, g: pp.Grid) -> np.ndarray:
-        """Homogeneous Dirichlet values except at left end of fracture.
-        """
+        """Homogeneous Dirichlet values except at left end of fracture."""
         val = np.zeros(g.num_faces)
         if g.dim == 1:
-            val[g.face_centers[0]<1e-5] = .0
+            val[g.face_centers[0] < 1e-5] = 0.0
         return val
 
     def _source_scalar(self, g: pp.Grid) -> np.ndarray:
-        """Homogeneous Dirichlet values except at left end of fracture.
-        """
+        """Homogeneous Dirichlet values except at left end of fracture."""
         val = np.zeros(g.num_cells)
-        if g.dim == 1:
-            val[g.cell_centers[0] < 3e-1] = .1
+        if g.dim == self._Nd - 1:
+            val[0] = 0.1
         return val
 
     def _aperture(self, g: pp.Grid) -> np.ndarray:
@@ -142,30 +149,42 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
 
 
 if __name__ == "__main__":
-    num_iterations = 14
+    num_iterations = 20
     params = {
-        "use_tpfa": True,
+        "use_tpfa": False,
         "linear_solver": "pypardiso",
         "max_iterations": num_iterations,
         "nl_convergence_tol": 1e-10,
         "nl_divergence_tol": 1e5,
-        "grid_method": horizontal_fracture,
-        "mesh_args": [2, 2],
         "use_ad": True,
         "time_step": 1e5,
         "end_time": 1e5,
-
+        "plotting_file_name": "biot",
     }
-    nonlinear_model = BiotNonlinearTpfa(params)
-    pp.run_time_dependent_model(nonlinear_model, params)
-    params_linear = params.copy()
-    params_linear["use_linear_discretization"] = True
-    linear_model = BiotNonlinearTpfa(params_linear)
-    pp.run_stationary_model(linear_model, params_linear)
-    plot_convergence(nonlinear_model, linear_model, plot_errors=False)
-    for m in [linear_model, nonlinear_model]:
-        gf =m.gb.grids_of_dimension(1).tolist()
+    nc = 20
+    mesh_size = 1e-1
+    update_params = {
+        "Simplex 3d": {
+            "simplex": True,
+            "grid_method": horizontal_fracture_3d,
+            "mesh_args": {
+                "mesh_size_bound": mesh_size,  # 5782 at 1e-1.
+                "mesh_size_frac": mesh_size,
+                "mesh_size_min": mesh_size / 2,
+            },
+        },
+        "Simplex 2d": {
+            "grid_method": horizontal_fracture_2d,
+        },
+        "Cartesian 3d": {
+            "simplex": False,
+            "grid_method": horizontal_fracture_3d,
+            "mesh_args": np.array([nc, nc, nc]),
+        },
+        "Cartesian 2d": {
+            "grid_method": horizontal_fracture_2d,
+            "mesh_args": np.array([nc, nc]),
+        },
+    }
 
-        u = m._displacement_jump(gf).evaluate(m.dof_manager)
-        print(u.val)
-        print("p", m._ad.pressure.evaluate(m.dof_manager).val)
+    run_simulation_pairs_varying_parameters(params, update_params, BiotNonlinearTpfa)

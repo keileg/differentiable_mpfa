@@ -2,13 +2,18 @@ import porepy as pp
 import numpy as np
 import scipy.sparse as sps
 from typing import Dict
-from grids import one_dimensional_grid_bucket, two_dimensional_cartesian, two_dimensional_cartesian_perturbed
+from grids import (
+    one_dimensional_grid_bucket,
+    two_dimensional_cartesian,
+    two_dimensional_cartesian_perturbed,
+)
 from incompressible_flow_nonlinear_tpfa import NonlinearIncompressibleFlow
 from plotting import plot_convergence
 
 
 def sqrt(var):
     return var ** (1 / 2)
+
 
 class SquareRootPermeability:
     def _source(self, g: pp.Grid) -> np.ndarray:
@@ -17,7 +22,9 @@ class SquareRootPermeability:
         Units: m^3 / s
         """
         x = g.cell_centers[0]
-        val = (1/2 - x)*(1 - 2*x)/sqrt(x*(1 - x) + 1) - 2*sqrt(x*(1 - x) + 1)
+        val = (1 / 2 - x) * (1 - 2 * x) / sqrt(x * (1 - x) + 1) - 2 * sqrt(
+            x * (1 - x) + 1
+        )
         return val * g.cell_volumes
 
     def p_analytical(self, g=None):
@@ -33,7 +40,10 @@ class SquareRootPermeability:
 
     def _permeability_function_ad(self, pressure: pp.ad.Variable):
         nc = pressure.val.size
-        k0 = pp.ad.Ad_array(self.params["k0"] * np.ones(nc), sps.csr_matrix((nc, self.dof_manager.num_dofs()), dtype=float))
+        k0 = pp.ad.Ad_array(
+            self.params["k0"] * np.ones(nc),
+            sps.csr_matrix((nc, self.dof_manager.num_dofs()), dtype=float),
+        )
         val = sqrt(pressure + k0)
         return val
 
@@ -50,6 +60,7 @@ class SquareRootPermeability:
         val = self.p_analytical(g) / (1.1 - np.random.rand(g.num_cells) / 5)
         return val
 
+
 class SquareRootPermeability2d(SquareRootPermeability):
     def _source(self, g: pp.Grid) -> np.ndarray:
         """Source term.
@@ -59,7 +70,16 @@ class SquareRootPermeability2d(SquareRootPermeability):
         x = g.cell_centers[0]
         y = g.cell_centers[1]
         k0 = self.params["k0"]
-        val = -2*x*(1 - x)*sqrt(k0 + x*y*(1 - x)*(1 - y)) - 2*y*(1 - y)*sqrt(k0 + x*y*(1 - x)*(1 - y)) + (-x*y*(1 - x) + x*(1 - x)*(1 - y))*(-x*y*(1 - x)/2 + x*(1 - x)*(1 - y)/2)/sqrt(k0 + x*y*(1 - x)*(1 - y)) + (-x*y*(1 - y) + y*(1 - x)*(1 - y))*(-x*y*(1 - y)/2 + y*(1 - x)*(1 - y)/2)/sqrt(k0 + x*y*(1 - x)*(1 - y))
+        val = (
+            -2 * x * (1 - x) * sqrt(k0 + x * y * (1 - x) * (1 - y))
+            - 2 * y * (1 - y) * sqrt(k0 + x * y * (1 - x) * (1 - y))
+            + (-x * y * (1 - x) + x * (1 - x) * (1 - y))
+            * (-x * y * (1 - x) / 2 + x * (1 - x) * (1 - y) / 2)
+            / sqrt(k0 + x * y * (1 - x) * (1 - y))
+            + (-x * y * (1 - y) + y * (1 - x) * (1 - y))
+            * (-x * y * (1 - y) / 2 + y * (1 - x) * (1 - y) / 2)
+            / sqrt(k0 + x * y * (1 - x) * (1 - y))
+        )
 
         return -val * g.cell_volumes
 
@@ -70,6 +90,7 @@ class SquareRootPermeability2d(SquareRootPermeability):
         y = g.cell_centers[1]
         return x * y * (1 - x) * (1 - y)
 
+
 class SquarePermeability2d(SquareRootPermeability):
     def _source(self, g: pp.Grid) -> np.ndarray:
         """Source term.
@@ -78,7 +99,11 @@ class SquarePermeability2d(SquareRootPermeability):
         """
         x = g.cell_centers[0]
         y = g.cell_centers[1]
-        val = -2*x*(1 - x)*(x**2 + 0.1) + 2*x*(-x*y*(1 - y) + y*(1 - x)*(1 - y)) - 2*y*(1 - y)*(x**2 + 0.1)
+        val = (
+            -2 * x * (1 - x) * (x**2 + 0.1)
+            + 2 * x * (-x * y * (1 - y) + y * (1 - x) * (1 - y))
+            - 2 * y * (1 - y) * (x**2 + 0.1)
+        )
         return val * g.cell_volumes
 
     def p_analytical(self, g=None):
@@ -89,19 +114,21 @@ class SquarePermeability2d(SquareRootPermeability):
         return x * y * (1 - x) * (1 - y)
 
     def _permeability_function(self, pressure: pp.ad.Variable):
-        val = pressure ** 2 + 0.1
+        val = pressure**2 + 0.1
         return val
 
     def _permeability_function_ad(self, pressure: pp.ad.Variable):
-        val = pressure ** 2 + 0.1
+        val = pressure**2 + 0.1
         return val
-
 
 
 class CombinedModel(SquareRootPermeability2d, NonlinearIncompressibleFlow):
     pass
+
+
 # class CombinedModel(SquarePermeability2d, NonlinearIncompressibleFlow):
 #     pass
+
 
 def run_linear_and_nonlinear(params: Dict, model_class, plot_line_style=None) -> None:
     """Run a pair of one linear and one nonlinear simulation.
@@ -122,10 +149,15 @@ def run_linear_and_nonlinear(params: Dict, model_class, plot_line_style=None) ->
     nonlinear_model = model_class(params)
     pp.run_stationary_model(nonlinear_model, params)
 
-    plot_convergence(nonlinear_model, linear_model, plot_errors=False, line_style=plot_line_style)
+    plot_convergence(
+        nonlinear_model, linear_model, plot_errors=False, line_style=plot_line_style
+    )
     return nonlinear_model, linear_model
 
-def run_simulation_pairs_varying_parameters(params: Dict, update_params: Dict[str, Dict], model_class) -> None:
+
+def run_simulation_pairs_varying_parameters(
+    params: Dict, update_params: Dict[str, Dict], model_class
+) -> None:
     """Run multiple pairs of simulations varying some parameters.
 
     Args:
@@ -144,11 +176,15 @@ def run_simulation_pairs_varying_parameters(params: Dict, update_params: Dict[st
 
 
     """
-    line_styles = ["-", "-.", ":"]
-    for i, name, updates in enumerate(update_params.items()):
+    line_styles = ["-", "-.", ":", "--"]
+    i = 0
+    for name, updates in update_params.items():
         params.update(updates)
         params["file_name"] = name
         run_linear_and_nonlinear(params, model_class, line_styles[i])
+        i += 1
+
+
 if __name__ == "__main__":
     num_iterations = 10
     params = {
@@ -171,19 +207,29 @@ if __name__ == "__main__":
     update_params_mesh_type = {
         "10k cells": {
             "plotting_file_name": "analytical_solution_mpfa_mesh_types",
-            "n_cells": [100, 100]},
-        "simplex": {"simplex": True,
-                    "mesh_args": {"mesh_size_bound": 5e-3,  # 92562 at 5e-3.
-                                  "mesh_size_frac": 1e-5}},
-        "perturbed": {"simplex": False,
-                      "grid_method": two_dimensional_cartesian_perturbed},
+            "n_cells": [100, 100],
+        },
+        "simplex": {
+            "simplex": True,
+            "mesh_args": {
+                "mesh_size_bound": 5e-3,  # 92562 at 5e-3.
+                "mesh_size_frac": 1e-5,
+            },
+        },
+        "perturbed": {
+            "simplex": False,
+            "grid_method": two_dimensional_cartesian_perturbed,
+        },
     }
     update_params_anisotropy = {
         "50 ycells": {
             "plotting_file_name": "analytical_solution_mpfa_anisotropy",
             "grid_method": two_dimensional_cartesian_perturbed,
-            "n_cells": [50, 50]},
+            "n_cells": [50, 50],
+        },
         "200 ycells": {"n_cells": [50, 200]},
         "1000 ycells": {"n_cells": [50, 1000]},
     }
-    run_simulation_pairs_varying_parameters(params, update_params_anisotropy, CombinedModel)
+    run_simulation_pairs_varying_parameters(
+        params, update_params_anisotropy, CombinedModel
+    )

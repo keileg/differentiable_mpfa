@@ -43,7 +43,6 @@ class CommonModel:
     def _is_nonlinear_problem(self):
         return True
 
-
     def _flux(self, subdomains: List[pp.Grid]) -> pp.ad.Operator:
         try:
             key = self.scalar_parameter_key
@@ -179,7 +178,7 @@ class CommonModel:
         """
 
         # We normalize by the size of the solution vector
-        error =self._residuals[-1]
+        error = self._residuals[-1]
         logger.debug(f"Normalized error: {error:.2e}")
         converged = error < nl_params["nl_convergence_tol"]
         diverged = False
@@ -194,27 +193,23 @@ class CommonModel:
         else:
             raise ValueError("Tried solving singular matrix for the linear problem.")
 
-    def after_newton_convergence(self, solution: np.ndarray, errors: float, iteration_counter: int
+    def after_newton_convergence(
+        self, solution: np.ndarray, errors: float, iteration_counter: int
     ) -> None:
         super().after_newton_convergence(solution, errors, iteration_counter)
         self._export_step()
 
     def _export_step(self):
-        self.exporter.write_vtu(data=["p"], time_dependent = True, time_step = 1)
+        self.exporter.write_vtu(data=["p"], time_dependent=True, time_step=1)
+
 
 class NonlinearIncompressibleFlow(CommonModel, pp.IncompressibleFlow):
-
-
-
-
     def _set_parameters(self) -> None:
         super()._set_parameters()
         self._bc_map = {}
         for g, d in self.gb:
             parameters = d[pp.PARAMETERS][self.parameter_key]
-            self._bc_map[g] = (parameters["bc"])  #, parameters["bc_values"])
-
-
+            self._bc_map[g] = parameters["bc"]  # , parameters["bc_values"])
 
     def _permeability(self, g: pp.Grid):
         if hasattr(self, "dof_manager"):
@@ -225,14 +220,11 @@ class NonlinearIncompressibleFlow(CommonModel, pp.IncompressibleFlow):
             p = self._initial_pressure(g)
         return self._permeability_function(p)
 
-
     def _initial_pressure(self, g):
         return np.zeros(g.num_cells)
 
     def _permeability_function(self, var: np.ndarray):
         return np.ones(var.size)
-
-
 
 
 if __name__ == "__main__":
