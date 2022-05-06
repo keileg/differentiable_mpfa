@@ -9,7 +9,8 @@ import scipy.sparse as sps
 import sympy as sym
 import scipy.sparse.linalg as spla
 import matplotlib
-matplotlib.use('Qt5Agg')
+
+matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
 
 try:
@@ -39,19 +40,27 @@ linear_perm = True
 
 
 if linear_perm:
+
     def permeability_from_pressure(var):
         return 1 + var
 
-
     def source_function(x):
-        return - 1 - 6 * (x - x * x)
+        return -1 - 6 * (x - x * x)
+
 else:
+
     def permeability_from_pressure(var):
         return 1 + var + var * var
 
-
     def source_function(x):
-        return - 2 + 2 * x - 12 * x * x + 20 * x * x * x - 10 * x ** 4 + ( 1 - 6 * x + 6 * x ** 2)
+        return (
+            -2
+            + 2 * x
+            - 12 * x * x
+            + 20 * x * x * x
+            - 10 * x**4
+            + (1 - 6 * x + 6 * x**2)
+        )
 
     # def permeability_from_pressure(var):
     #     return 1 + var *  var
@@ -64,14 +73,24 @@ else:
 # def p_analytical(x):
 #     return (1 - x) * x
 def sqrt(var):
-    return var ** (1/2)
+    return var ** (1 / 2)
+
 
 def source_function(x):
-   return -2*sqrt(x*(1 - x)) - 0.2 + sqrt(x*(1 - x))*(1/2 - x)*(1 - 2*x)/(x*(1 - x))
+    return (
+        -2 * sqrt(x * (1 - x))
+        - 0.2
+        + sqrt(x * (1 - x)) * (1 / 2 - x) * (1 - 2 * x) / (x * (1 - x))
+    )
+
+
 def p_analytical(x):
-   return x*(1 - x)
+    return x * (1 - x)
+
+
 def permeability_from_pressure(var):
-   return sqrt(var) + 0.1
+    return sqrt(var) + 0.1
+
 
 # The Tpfa discretization needs to know which faces are on the boundary for each grid.
 # This means that having access to Ad Operator formulation is insufficient (this takes)
@@ -86,7 +105,7 @@ for g, data in gb:
     }
     x, y = g.cell_centers[0], g.cell_centers[1]
 
-    initial_value = 10. * np.ones(g.num_cells)   # p_analytical(x)
+    initial_value = 10.0 * np.ones(g.num_cells)  # p_analytical(x)
     data[pp.STATE] = {
         variable: initial_value.copy(),
         pp.ITERATE: {
@@ -100,7 +119,7 @@ for g, data in gb:
     bc_values = np.zeros(g.num_faces)
     bc_values[bound_faces] = p_analytical(g.face_centers[0, bound_faces])
     print(bc_values)
-    bc_map[g] = (bc) #, bc_values)
+    bc_map[g] = bc  # , bc_values)
     permeability = pp.SecondOrderTensor(permeability_from_pressure(initial_value))
     source_values = np.zeros(g.num_cells)
     x, y = g.cell_centers[0], g.cell_centers[1]
@@ -114,12 +133,13 @@ for g, data in gb:
 
     pp.initialize_data(g, data, keyword, specified_parameters=specified_data)
 
+
 def setup_diff_problem(gb, fv_scheme="tp"):
     dof_manager = pp.DofManager(gb)
     eq_manager = pp.ad.EquationManager(gb, dof_manager)
 
     p = eq_manager.merge_variables([(g, variable) for g in grid_list])
-    if fv_scheme=="tp":
+    if fv_scheme == "tp":
         base_discr = pp.ad.TpfaAd(keyword, grid_list)
     else:
         base_discr = pp.ad.MpfaAd(keyword, grid_list)
@@ -162,6 +182,7 @@ def setup_diff_problem(gb, fv_scheme="tp"):
     eq = div * (base_discr.flux * p + base_discr.bound_flux * bc) - source
     return eq_ad, eq, flux_tpfa, dof_manager
 
+
 eq_ad, eq_non_ad, flux_tpfa, dof_manager = setup_diff_problem(gb, "tp")
 if use_ad:
     eq = eq_ad
@@ -175,7 +196,8 @@ residuals = []
 for i in range(nsteps):
     for g, d in gb:
         p_loc = dof_manager.assemble_variable([g], variable, from_iterate=True)[
-            dof_manager.grid_and_variable_to_dofs(g, variable)]
+            dof_manager.grid_and_variable_to_dofs(g, variable)
+        ]
         # p_loc = dof_manager.assemble_variable([g], variable)[dof_manager.grid_and_variable_to_dofs(g, variable)]
         new_perm_value = permeability_from_pressure(p_loc)
         d[pp.PARAMETERS][keyword]["second_order_tensor"] = pp.SecondOrderTensor(

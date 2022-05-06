@@ -1,9 +1,16 @@
+"""
+Grid generation functions.
+
+Each function constructs and returns a mixed-dimensional grid and a (unitary) domain dictionary.
+"""
+
+
 import porepy as pp
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 
-def one_dimensional_grid_bucket(params):
+def one_dimensional_grid_bucket(params: Dict) -> Tuple[pp.GridBucket, Dict]:
     phys_dims: List = params.get("phys_dims", [1])
     n_cells: List = params.get("n_cells", [2])
     box: Dict = pp.geometry.bounding_box.from_points(np.array([[0], phys_dims]).T)
@@ -12,13 +19,13 @@ def one_dimensional_grid_bucket(params):
     return gb, box
 
 
-def two_dimensional_cartesian(params):
+def two_dimensional_cartesian(params: Dict) -> Tuple[pp.GridBucket, Dict]:
     if params.get("simplex", False):
-        domain = pp.grids.standard_grids.utils.unit_domain(2)
+        box = pp.grids.standard_grids.utils.unit_domain(2)
         gb = pp.grids.standard_grids.utils.make_gb_2d_simplex(
-            mesh_args=params["mesh_args"], points=None, edges=None, domain=domain
+            mesh_args=params["mesh_args"], points=None, edges=None, domain=box
         )
-        return gb, domain
+        return gb, box
 
     phys_dims: List = params.get("phys_dims", [1, 1])
     n_cells: List = params.get("n_cells", [2, 2])
@@ -28,23 +35,39 @@ def two_dimensional_cartesian(params):
     return gb, box
 
 
-def two_dimensional_cartesian_perturbed(params):
+def three_dimensional_cartesian(params: Dict) -> Tuple[pp.GridBucket, Dict]:
+    if params.get("simplex", False):
+        domain = pp.grids.standard_grids.utils.unit_domain(3)
+        gb = pp.grids.standard_grids.utils.make_gb_3d_simplex(
+            mesh_args=params["mesh_args"], points=None, edges=None, domain=domain
+        )
+        return gb, domain
+
+    phys_dims: List = params.get("phys_dims", [1, 1, 1])
+    n_cells: List = params.get("n_cells", [2, 2, 2])
+    box: Dict = pp.geometry.bounding_box.from_points(np.array([[0, 0, 0], phys_dims]).T)
+    g: pp.Grid = pp.CartGrid(n_cells, physdims=phys_dims)
+    gb: pp.GridBucket = pp.meshing._assemble_in_bucket([[g]])
+    return gb, box
+
+
+def two_dimensional_cartesian_perturbed(params: Dict) -> Tuple[pp.GridBucket, Dict]:
     phys_dims: List = params.get("phys_dims", [1, 1])
     n_cells: List = params.get("n_cells", [2, 2])
     box: Dict = pp.geometry.bounding_box.from_points(np.array([[0, 0], phys_dims]).T)
     g: pp.Grid = pp.CartGrid(n_cells, physdims=phys_dims)
     internal_nodes = np.logical_not(g.tags["domain_boundary_nodes"])
     g.nodes[0, internal_nodes] += (
-        np.random.rand(internal_nodes.sum()) * phys_dims[0] / n_cells[0] / 4
+            np.random.rand(internal_nodes.sum()) * phys_dims[0] / n_cells[0] / 4
     )
     g.nodes[1, internal_nodes] += (
-        np.random.rand(internal_nodes.sum()) * phys_dims[1] / n_cells[1] / 3
+            np.random.rand(internal_nodes.sum()) * phys_dims[1] / n_cells[1] / 3
     )
     gb: pp.GridBucket = pp.meshing._assemble_in_bucket([[g]])
     return gb, box
 
 
-def horizontal_fracture_2d(params):
+def horizontal_fracture_2d(params: Dict) -> Tuple[pp.GridBucket, Dict]:
     endpoints = params.get("fracture_endpoints", [0, 1])
     mesh_args = params.get("mesh_args", [2, 2])
     simplex = params.get("simplex", False)
@@ -56,4 +79,6 @@ def horizontal_fracture_2d(params):
 def horizontal_fracture_3d(params):
     simplex = params.get("simplex", False)
     mesh_args = params.get("mesh_args", [2, 2, 2])
-    return pp.grid_buckets_3d.single_horizontal(mesh_args=mesh_args, simplex=simplex)
+    endpoints = params.get("fracture_endpoints", [0., 1])
+    return pp.grid_buckets_3d.single_horizontal(mesh_args=mesh_args, simplex=simplex, x_coords=endpoints,
+                                                y_coords=endpoints)
