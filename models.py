@@ -6,6 +6,7 @@ from functools import partial
 import porepy as pp
 import numpy as np
 import scipy.sparse as sps
+from utility_functions import extract_line_solutions
 
 from pypardiso import spsolve as pardisosolve
 import logging
@@ -94,7 +95,6 @@ class CommonModel:
         self._ad.flux_discretization = base_discr
 
         flux_function = pp.ad.DifferentiableFVAd(
-            pp.ad.differentiable_mpfa,
             grid_list=subdomains,
             bc=self._bc_map,
             base_discr=base_discr,
@@ -157,6 +157,7 @@ class CommonModel:
 
         for g, d in self.gb:
             d[pp.STATE]["permeability"] = self._permeability(g)
+        extract_line_solutions(self)
 
     def assemble_and_solve_linear_system(self, tol: float) -> np.ndarray:
 
@@ -244,11 +245,12 @@ class CommonModel:
     def after_simulation(self):
         self.exporter.write_pvd(self.exporter._exported_time_step_file_names)
 
-    def _kozeny_carman(self, porosity):
+    def _power_law_permeability(self, porosity):
         K_0 = self.rock.PERMEABILITY
         phi_0 = self.rock.POROSITY
+        eta = self.params.get("permeability_exponent", 3)
         pbyp = porosity / phi_0
-        perm = K_0 * pbyp * pbyp * pbyp
+        perm = K_0 * pbyp ** eta
         return perm
 
     def box_to_points(self) -> np.ndarray:
@@ -365,7 +367,7 @@ class Chemistry(NonlinearIncompressibleFlow):
 
     def _permeability(self, g: pp.Grid):
         phi = self._porosity(g)
-        return self._kozeny_carman(phi)
+        return self._power_law_permeability(phi)
 
     def _porosity(self, g):
         params = self.gb.node_props(g)[pp.PARAMETERS][self.c_parameter_key]
@@ -378,7 +380,7 @@ class Chemistry(NonlinearIncompressibleFlow):
         )[self.dof_manager.grid_and_variable_to_dofs(g,
                                                      self.component_c_variable)]
         # TODO: fix ad division
-        phi = phi_0 - concentration_c * rho_c
+        phi = phi_0 * (1 - concentration_c * rho_c)
         return phi
 
     def _permeability_function_ad(self, concentration_c: pp.ad.Ad_array):
@@ -389,19 +391,32 @@ class Chemistry(NonlinearIncompressibleFlow):
                                       subdomains,
                                       name="rho_0",
                                       ).evaluate(self.dof_manager)
-        phi_0 = pp.ad.ParameterArray(self.c_parameter_key,
+        phi_0m = pp.ad.ParameterMatrix(self.c_parameter_key,
                                      "reference_porosity",
                                      subdomains,
                                      name="phi_0",
                                      ).parse(self.gb)
-        phi_0 = pp.ad.Ad_array(phi_0, sps.csr_matrix(concentration_c.jac.shape))
-        phi = self._porosity_ad(concentration_c, rho_c, phi_0)
-        permeability = self._kozeny_carman(phi)
+        phi_0a = pp.ad.ParameterArray(self.c_parameter_key,
+                                     "reference_porosity",
+                                     subdomains,
+                                     name="phi_0",
+                                     ).parse(self.gb)
+        # phi_0 = pp.ad.Ad_array(phi_0, sps.csr_matrix(concentration_c.jac.shape))
+        phi = (-1) * phi_0m * (rho_c * concentration_c) + phi_0a# self._porosity_ad(concentration_c, rho_c, phi_0)
+        permeability = self._power_law_permeability(phi)
         return permeability
 
     def _porosity_ad(self, concentration_c, rho_c, phi_0):
-        return phi_0 - rho_c * concentration_c
+        # return phi_0 * (1 - rho_c * concentration_c)
+        subdomains = [g for g, _ in self.gb]
 
+        phi_0a = pp.ad.ParameterArray(self.c_parameter_key,
+                                      "reference_porosity",
+                                      subdomains,
+                                      name="phi_0",
+                                      )
+        val = (-1) * phi_0 * (rho_c * concentration_c) + phi_0a
+        return val
     def _advective_flux(self, subdomains: List[pp.Grid], component: str) -> pp.ad.Operator:
         """
 
@@ -475,7 +490,7 @@ class Chemistry(NonlinearIncompressibleFlow):
                                       subdomains,
                                       name="rho_0",
                                       )
-        phi_0 = pp.ad.ParameterArray(self.c_parameter_key,
+        phi_0 = pp.ad.ParameterMatrix(self.c_parameter_key,
                                      "reference_porosity",
                                      subdomains,
                                      name="phi_0",
@@ -506,12 +521,12 @@ class Chemistry(NonlinearIncompressibleFlow):
             Reaction term on AD form.
 
         """
-        rho_c = pp.ad.ParameterMatrix(self.c_parameter_key,
+        rho_c_inv = pp.ad.ParameterMatrix(self.c_parameter_key,
                                       "density_inv",
                                       subdomains,
-                                      name="rho_0",
+                                      name="rho_C",
                                       )
-        phi_0 = pp.ad.ParameterArray(self.c_parameter_key,
+        phi_0 = pp.ad.ParameterMatrix(self.c_parameter_key,
                                      "reference_porosity",
                                      subdomains,
                                      name="phi_0",
@@ -529,9 +544,14 @@ class Chemistry(NonlinearIncompressibleFlow):
         product = 1
         for component in dissolved_components:
             var = getattr(self._ad, "component_" + component)
-            product *= var
+            rho_var_inv = pp.ad.ParameterMatrix(getattr(self, component + "_parameter_key"),
+                                          "density_inv",
+                                          subdomains,
+                                          name="rho_C",
+                                          )
+            product *= rho_var_inv * var
         # product *= (1-self._ad.component_c)
-        phi = self._porosity_ad(self._ad.component_c, rho_c, phi_0)
+        phi = self._porosity_ad(self._ad.component_c, rho_c_inv, phi_0)
         rate = self._area_factor(phi, subdomains) * (r_0 * (equilibrium_constant_inv * product - 1))
         return rate
 
@@ -576,7 +596,7 @@ class Chemistry(NonlinearIncompressibleFlow):
                                       subdomains,
                                       name="rho_0",
                                       )
-        phi_0 = pp.ad.ParameterArray(self.c_parameter_key,
+        phi_0 = pp.ad.ParameterMatrix(self.c_parameter_key,
                                      "reference_porosity",
                                      subdomains,
                                      name="phi_0",
@@ -613,112 +633,6 @@ class Chemistry(NonlinearIncompressibleFlow):
 
     def _export_names(self):
         return [self.variable, self.component_a_variable, self.component_c_variable, "permeability"]
-
-
-class EquilibriumChemistry(Chemistry):
-    def __init__(self, params: Dict):
-        super().__init__(params)
-        self.component_b_variable = "B"
-        self.b_parameter_key = "chemistry_parameters_b"
-        # Stoichiometric constant
-        self._beta = self.params.get("beta", 1)
-        self._equilibrium_constant = self.params.get("equilibrium_constant", .25)
-
-    def _initial_condition(self):
-        """Initial condition for all primary variables and the parameter representing the
-         secondary flux variable (needs to be present for first call to upwind discretization).
-        """
-        # Pressure, a, b and flux for a-parameter
-        super()._initial_condition()
-        # add b and flux for b-parameter
-        for g, d in self.gb:
-            state = {self.component_b_variable: self._initial_b(g)}
-            d[pp.STATE].update(state)
-            d[pp.STATE][pp.ITERATE].update(state.copy())
-            pp.initialize_data(g, d, self.b_parameter_key, {"darcy_flux": np.zeros(g.num_faces)})
-
-    def _assign_variables(self) -> None:
-        """
-        Assign primary variables to the nodes and edges of the grid bucket.
-        """
-        super()._assign_variables()
-        # First for the nodes
-        for g, d in self.gb:
-            d[pp.PRIMARY_VARIABLES].update({self.component_b_variable: {"cells": 1}})
-
-    def _create_ad_variables(self) -> None:
-        """Create the merged variables for potential and mortar flux"""
-        super()._create_ad_variables()
-        grid_list = [g for g, _ in self.gb.nodes()]
-        self._ad.component_b = self._eq_manager.merge_variables(
-            [(g, self.component_b_variable) for g in grid_list]
-        )
-
-    def _assign_equations(self) -> None:
-        """Define equations through discretizations.
-
-        Assigns a Laplace/Darcy problem discretized using Mpfa on all subdomains with
-        Neumann conditions on all internal boundaries. On edges of co-dimension one,
-        interface fluxes are related to higher- and lower-dimensional pressures using
-        the RobinCoupling.
-
-        Gravity is included, but may be set to 0 through assignment of the vector_source
-        parameter.
-        """
-        NonlinearIncompressibleFlow._assign_equations(self)
-
-        subdomain_transport_equation_a: pp.ad.Operator = self._subdomain_transport_equation(self.grid_list,
-                                                                                            component="a")
-        subdomain_transport_equation_b: pp.ad.Operator = self._subdomain_transport_equation(self.grid_list,
-                                                                                            component="b")
-        equilibrium_equation: pp.ad.Operator = self._equilibrium_equation(self.grid_list)
-        # Assign equations to manager
-        self._eq_manager.name_and_assign_equations(
-            {
-                "subdomain_transport_a": subdomain_transport_equation_a,
-                "subdomain_transport_b": subdomain_transport_equation_b,
-                "equilibrium": equilibrium_equation,
-            },
-        )
-
-    def _equilibrium_equation(self, subdomains: List[pp.Grid]) -> pp.ad.Operator:
-        """Mass balance equation for slightly compressible flow in a deformable medium.
-
-
-        Parameters
-        ----------
-        subdomains : List[pp.Grid]
-            Subdomains on which the equation is defined.
-
-        Returns
-        -------
-        eq : pp.ad.Operator
-            The equation on AD form.
-
-        """
-        equilibrium_constant = pp.ad.ParameterArray(
-            param_keyword=self.c_parameter_key,
-            array_keyword="equilibrium_constant",
-            grids=subdomains,
-        )
-        log = pp.ad.Function(pp.ad.functions.log, "logarithm")
-        eq: pp.ad.Operator = log(equilibrium_constant) - self._alpha * log(self._ad.component_a) - self._beta * log(
-            self._ad.component_b)
-
-        return eq
-
-    def before_newton_iteration(self):
-        super().before_newton_iteration()
-        self._ad.dummy_upwind_for_discretization_b.discretize(self.gb)
-
-    def compute_fluxes(self) -> None:
-        super().compute_fluxes()
-        # Copy to b parameters
-        for _, d in self.gb:
-            d[pp.PARAMETERS][self.b_parameter_key]["darcy_flux"] = d[pp.PARAMETERS][self.a_parameter_key]["darcy_flux"]
-
-    def _export_names(self):
-        return super()._export_names() + [self.component_b_variable]
 
 
 class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
@@ -778,7 +692,7 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
     def _permeability(self, g: pp.Grid):
         if g.dim == self._Nd:
             phi = self._porosity(g)
-            vals = self._kozeny_carman(phi)
+            vals = self._power_law_permeability(phi)
         else:
             vals = self._aperture(g) ** 2
         return vals
@@ -837,7 +751,7 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
             [self._nd_grid()]
         ).evaluate(self.dof_manager)
         frac = u_n * u_n * u_n
-        val = prolongation_frac * frac + prolongation_matrix * self._kozeny_carman(phi)
+        val = prolongation_frac * frac + prolongation_matrix * self._power_law_permeability(phi)
         return val
 
     def _fluid_flux(self, subdomains: List[pp.Grid]) -> pp.ad.Operator:
