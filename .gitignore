@@ -6,3 +6,5 @@
 *.png
 *.pvsm
 *.pyc
+*.vtu
+*.pvd
