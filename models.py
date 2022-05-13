@@ -93,24 +93,19 @@ class CommonModel:
             base_discr = pp.ad.MpfaAd(key, subdomains)
         self._ad.flux_discretization = base_discr
 
-        TPFA_function = pp.ad.Function(
-            partial(
-                # For the moment, the actual implementation is a function differentiable_mpfa
-                # located in pp.ad.discretizations. Both should be revised.
-                pp.ad.differentiable_mpfa,
-                grid_list=subdomains,
-                bc=self._bc_map,
-                base_discr=base_discr,
-                dof_manager=self.dof_manager,
-                var_name=var,
-                projections=pp.ad.SubdomainProjections(subdomains),
-            ),
-            "tpfa_ad",
+        flux_function = pp.ad.DifferentiableFVAd(
+            pp.ad.differentiable_mpfa,
+            grid_list=subdomains,
+            bc=self._bc_map,
+            base_discr=base_discr,
+            dof_manager=self.dof_manager,
+            var_name=var,
         )
+
         p = self._ad.pressure
         perm_function = pp.ad.Function(self._permeability_function_ad, "perm_function")
         perm_argument = getattr(self, "permeability_argument", p)
-        flux_ad = TPFA_function(perm_function, perm_argument, p)
+        flux_ad = flux_function(perm_function, perm_argument, p)
         self._ad.dummy_eq_for_discretization = base_discr.flux * p
 
         bc_values = pp.ad.ParameterArray(
@@ -124,12 +119,12 @@ class CommonModel:
             grids=subdomains,
         )
         flux: pp.ad.Operator = (
-                flux_ad
-                + base_discr.bound_flux * bc_values
-                + base_discr.bound_flux
-                * self._ad.mortar_proj.mortar_to_primary_int
-                * self._ad.mortar_flux
-                + base_discr.vector_source * vector_source_subdomains
+            flux_ad
+            + base_discr.bound_flux * bc_values
+            + base_discr.bound_flux
+            * self._ad.mortar_proj.mortar_to_primary_int
+            * self._ad.mortar_flux
+            + base_discr.vector_source * vector_source_subdomains
         )
         if self.params.get("use_linear_discretization", False):
             # super_model = pp.ContactMechanicsBiot if hasattr(self, "displacement_variable") else pp.IncompressibleFlow
@@ -853,19 +848,12 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
             base_discr = pp.ad.MpfaAd(self.scalar_parameter_key, subdomains)
         self._ad.flux_discretization = base_discr
 
-        TPFA_function = pp.ad.Function(
-            partial(
-                # For the moment, the actual implementation is a function differentiable_mpfa
-                # located in pp.ad.discretizations. Both should be revised.
-                pp.ad.differentiable_mpfa,
-                grid_list=subdomains,
-                bc=self._bc_map,
-                base_discr=base_discr,
-                dof_manager=self.dof_manager,
-                var_name=self.scalar_variable,
-                projections=pp.ad.SubdomainProjections(subdomains),
-            ),
-            "tpfa_ad",
+        TPFA_function = pp.ad.DifferentiableFVAd(
+            grid_list=subdomains,
+            bc=self._bc_map,
+            base_discr=base_discr,
+            dof_manager=self.dof_manager,
+            var_name=self.scalar_variable,
         )
         p = self._ad.pressure
         u_j = self._ad.interface_displacement
@@ -886,12 +874,12 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
             grids=subdomains,
         )
         flux: pp.ad.Operator = (
-                flux_ad
-                + base_discr.bound_flux * bc_values
-                + base_discr.bound_flux
-                * self._ad.mortar_projections_scalar.mortar_to_primary_int
-                * self._ad.interface_flux
-                + base_discr.vector_source * vector_source_subdomains
+            flux_ad
+            + base_discr.bound_flux * bc_values
+            + base_discr.bound_flux
+            * self._ad.mortar_projections_scalar.mortar_to_primary_int
+            * self._ad.interface_flux
+            + base_discr.vector_source * vector_source_subdomains
         )
         if self.params.get("use_linear_discretization", False):
             return super()._fluid_flux(subdomains)
