@@ -1,11 +1,14 @@
 import sympy as sym
 
-nc = 3
+nc = 2
 x = sym.Symbol("x")
 p1, p2, A, d1, d2, abyd = sym.symbols("K1 K2 A d1 d2 abyd")
 # A, d1, d2 = sym.constants("A d1 d2")
+k = 1
+
+
 def perm(p):
-    return 0.1 + sym.sqrt(p)  # + x ** 2
+    return k + p
 
 
 # perm_from_var = .1 + sym.sqrt(var) #+ var ** 2
@@ -13,14 +16,14 @@ def perm(p):
 # f = sym.diff(flux)
 
 
-K1 = 0.1 + sym.sqrt(p1)
-K2 = 0.1 + sym.sqrt(p2)
+K1 = k + p1
+K2 = k + p2
 K1 = perm(p1)
 K2 = perm(p2)
 t1 = A * K1 / d1
 t2 = A * K2 / d2
-t1 = abyd * K1
-t2 = abyd * K2
+# t1 = abyd * K1
+# t2 = abyd * K2
 
 # t1, t2 = sym.symbols("t1 t2")
 dval = 0.5 / nc

@@ -4,15 +4,14 @@ Model used is SquareRootPermeability2d:
     Incompressible flow with k(p)=sqrt(p) + k_0.
 Multiple runs with different grids. Mostly mpfa, two runs with tpfa.
 """
-import porepy as pp
 import numpy as np
 import scipy.sparse as sps
-from grids import (
-    two_dimensional_cartesian,
-    two_dimensional_cartesian_perturbed,
-)
+from grids import (two_dimensional_cartesian,
+                   two_dimensional_cartesian_perturbed)
 from models import NonlinearIncompressibleFlow
 from utility_functions import run_simulation_pairs_varying_parameters
+
+import porepy as pp
 
 
 def sqrt(var):
@@ -81,12 +80,16 @@ class SquareRootPermeability2d(SquareRootPermeability):
         k0 = self.params["k0"]
         p0 = self.params["p0"]
         k1 = 1
-        val = -2 * k1 * x * (1 - x) * sqrt(k0 + k1 * x * y * (1 - x) * (1 - y) + p0) - 2 * k1 * y * (1 - y) * sqrt(
-            k0 + k1 * x * y * (1 - x) * (1 - y) + p0) + (-k1 * x * y * (1 - x) + k1 * x * (1 - x) * (1 - y)) * (
-                      -k1 * x * y * (1 - x) / 2 + k1 * x * (1 - x) * (1 - y) / 2) / sqrt(
-            k0 + k1 * x * y * (1 - x) * (1 - y) + p0) + (-k1 * x * y * (1 - y) + k1 * y * (1 - x) * (1 - y)) * (
-                      -k1 * x * y * (1 - y) / 2 + k1 * y * (1 - x) * (1 - y) / 2) / sqrt(
-            k0 + k1 * x * y * (1 - x) * (1 - y) + p0)
+        val = (
+            -2 * k1 * x * (1 - x) * sqrt(k0 + k1 * x * y * (1 - x) * (1 - y) + p0)
+            - 2 * k1 * y * (1 - y) * sqrt(k0 + k1 * x * y * (1 - x) * (1 - y) + p0)
+            + (-k1 * x * y * (1 - x) + k1 * x * (1 - x) * (1 - y))
+            * (-k1 * x * y * (1 - x) / 2 + k1 * x * (1 - x) * (1 - y) / 2)
+            / sqrt(k0 + k1 * x * y * (1 - x) * (1 - y) + p0)
+            + (-k1 * x * y * (1 - y) + k1 * y * (1 - x) * (1 - y))
+            * (-k1 * x * y * (1 - y) / 2 + k1 * y * (1 - x) * (1 - y) / 2)
+            / sqrt(k0 + k1 * x * y * (1 - x) * (1 - y) + p0)
+        )
 
         return -val * g.cell_volumes
 
@@ -104,6 +107,17 @@ class SquareRootPermeability2d(SquareRootPermeability):
         val[faces] = self.params["p0"]
         return val
 
+    def _vector_source(self, g: pp.Grid) -> np.ndarray:
+        """Zero vector source (gravity).
+
+        To assign a gravity-like vector source, add a non-zero contribution in
+        the last dimension:
+            vals[-1] = - pp.GRAVITY_ACCELERATION * fluid_density
+        """
+        vals = np.zeros((self.gb.dim_max(), g.num_cells))
+        vals[-1] = -1e-1
+        return vals
+
 
 class LinearPermeability2d:
     """Simple linear permeability.
@@ -111,13 +125,17 @@ class LinearPermeability2d:
 
     Not used in the paper at the moment, should probably be moved to archive.
     """
+
     def _source(self, g):
         x = g.cell_centers[0]
         y = g.cell_centers[1]
         k0 = self.params["k0"]
-        val = (-2 * x * (1 - x) * (x * y * (1 - x) * (1 - y) + k0) - 2 * y * (1 - y) * (
-                x * y * (1 - x) * (1 - y) + k0) + (-x * y * (1 - x) + x * (1 - x) * (1 - y)) ** 2 + (
-                       -x * y * (1 - y) + y * (1 - x) * (1 - y)) ** 2)
+        val = (
+            -2 * x * (1 - x) * (x * y * (1 - x) * (1 - y) + k0)
+            - 2 * y * (1 - y) * (x * y * (1 - x) * (1 - y) + k0)
+            + (-x * y * (1 - x) + x * (1 - x) * (1 - y)) ** 2
+            + (-x * y * (1 - y) + y * (1 - x) * (1 - y)) ** 2
+        )
         return -val * g.cell_volumes
 
     def p_analytical(self, g=None):
@@ -151,7 +169,7 @@ class Linear(LinearPermeability2d, NonlinearIncompressibleFlow):
 
 
 if __name__ == "__main__":
-    num_iterations = 20
+    num_iterations = 10
     params = {
         "use_ad": True,
         "use_tpfa": False,
@@ -167,50 +185,46 @@ if __name__ == "__main__":
     }
 
     update_params_cell_number = {
-        "100": {
-            "legend_title": "# cells",
-            "n_cells": [10, 10]
-        },
-        "10k": {
-            "n_cells": [100, 100]},
-        "160k":
-            {"n_cells": [400, 400]},  # TODO: Increase to 1m
+        "100": {"legend_title": "# cells", "n_cells": [10, 10]},
+        "10k": {"n_cells": [100, 100]},
+        "160k": {"n_cells": [400, 400]},  # TODO: Increase to 1m
     }
     update_params_mesh_type = {
-        "Cart, mp": {
+        "Cart, MP": {
             "legend_title": "Mesh, discretization",
             "plotting_file_name": "verification_mesh_and_discretization",
             # "n_cells": [10, 10],
             "n_cells": [100, 100],
         },
-        "Tri, mp": {
+        "Tri, MP": {
             "simplex": True,
             "mesh_args": {
                 "mesh_size_bound": 5e-3,  # 92562 at 5e-3.
                 "mesh_size_frac": 1e-5,
             },
         },
-        "Tri, tp": {"use_tpfa": True},
-        "Pert, mp": {
+        "Tri, TP": {"use_tpfa": True},
+        "Pert, MP": {
             "use_tpfa": False,
             "grid_method": two_dimensional_cartesian_perturbed,
         },
-        "Pert, tp": {"use_tpfa": True},
+        "Pert, TP": {"use_tpfa": True},
     }
     update_params_anisotropy = {
         "50": {
+            "use_tpfa": True,
             "plotting_file_name": "verification_anisotropy",
             "legend_title": "# cells y",
             "grid_method": two_dimensional_cartesian_perturbed,
-            "n_cells": [50, 50],
+            "n_cells": [4, 3],
         },
-        "200": {"n_cells": [50, 200]},
-        "1000": {"n_cells": [50, 1000]},
+        # "200": {"n_cells": [50, 200]},
+        # "1000": {"n_cells": [50, 1000]},
     }
-
-    all_updates = [update_params_cell_number, update_params_mesh_type, update_params_anisotropy]
-    for up in all_updates:
-        run_simulation_pairs_varying_parameters(params, up, CombinedModel)
+    #
+    # all_updates = [update_params_cell_number, update_params_mesh_type, update_params_anisotropy]
+    # for up in all_updates:
+    #     run_simulation_pairs_varying_parameters(params, up, CombinedModel)
 
     # update_params_linear = {
     #     "4": {
@@ -223,6 +237,6 @@ if __name__ == "__main__":
     #     "1600":
     #         {"n_cells": [40, 40]},
     # }
-    # run_simulation_pairs_varying_parameters(
-    #     params, update_params_linear, Linear
-    # )
+    run_simulation_pairs_varying_parameters(
+        params, update_params_anisotropy, CombinedModel
+    )

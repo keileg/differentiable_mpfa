@@ -1,18 +1,19 @@
-from models import BiotNonlinearTpfa
-import porepy as pp
 import numpy as np
 from grids import three_dimensional_cartesian
-from utility_functions import run_simulation_pairs_varying_parameters, plot_multiple_time_steps
+from models import BiotNonlinearTpfa
+from utility_functions import (plot_multiple_time_steps,
+                               run_simulation_pairs_varying_parameters)
 
-
+import porepy as pp
 
 
 class SingleDimParameters:
-
-
     def _source_scalar(self, g: pp.Grid) -> np.ndarray:
         """Injection at domain center."""
-        return self._domain_center_source(g, val=self.params["source_value"]) * g.cell_volumes
+        return (
+            self._domain_center_source(g, val=self.params["source_value"])
+            * g.cell_volumes
+        )
 
     def _biot_alpha(self, g: pp.Grid) -> np.ndarray:
         """Injection at domain center."""
@@ -42,26 +43,24 @@ class SingleDimParameters:
     def _initial_pressure(self, g):
         return 1e0 * np.ones(g.num_cells)
 
+
 class Model(SingleDimParameters, BiotNonlinearTpfa):
     pass
 
 
-
 if __name__ == "__main__":
-    nc = 13
+    nc = 5
     params = {
-
-        "use_ad": True,
-        "time_step": 1e5,
-        "end_time": 1e5,
+        "time_step": 2e5,
+        "end_time": 2e5,
         "plotting_file_name": "biot_matrix",
         "file_name": "biot_matrix",
         "grid_method": three_dimensional_cartesian,
         "n_cells": [nc, nc, nc],
         "mu": 10,
         "lambda": 10,
-        "source_value": -.15,
-        "biot_alpha": 1,
+        "source_value": -3e1,
+        "biot_alpha": 0.5,
         "n_time_steps": 1,
     }
 
@@ -98,9 +97,17 @@ if __name__ == "__main__":
         "1.0": {"biot_alpha": 10 * k},
     }
 
-    run_simulation_pairs_varying_parameters(
-        params, update_params, Model
-    )
+    update_params = {
+        "0.25": {"legend_title": "Biot alpha", "biot_alpha": 0.25},
+        "0.50": {"biot_alpha": 0.5},
+        "0.75": {"biot_alpha": 0.75},
+        "1.00": {"biot_alpha": 1.0},
+        # "1.0": {"biot_alpha": 10 * k},
+    }
+
+    run_simulation_pairs_varying_parameters(params, update_params, Model)
     for k in update_params.keys():
-        update_params[k]["models"][0].params["plotting_file_name"] +="_linear"
-    plot_multiple_time_steps(updates=update_params, n_steps=params["n_time_steps"], model_type="linear")
+        update_params[k]["models"][0].params["plotting_file_name"] += "_linear"
+    plot_multiple_time_steps(
+        updates=update_params, n_steps=params["n_time_steps"], model_type="linear"
+    )

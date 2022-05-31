@@ -5,9 +5,11 @@ Each function constructs and returns a mixed-dimensional grid and a (unitary) do
 """
 
 
-import porepy as pp
-import numpy as np
 from typing import Dict, List, Tuple
+
+import numpy as np
+
+import porepy as pp
 
 
 def one_dimensional_grid_bucket(params: Dict) -> Tuple[pp.GridBucket, Dict]:
@@ -58,10 +60,10 @@ def two_dimensional_cartesian_perturbed(params: Dict) -> Tuple[pp.GridBucket, Di
     g: pp.Grid = pp.CartGrid(n_cells, physdims=phys_dims)
     internal_nodes = np.logical_not(g.tags["domain_boundary_nodes"])
     g.nodes[0, internal_nodes] += (
-            np.random.rand(internal_nodes.sum()) * phys_dims[0] / n_cells[0] / 4
+        np.random.rand(internal_nodes.sum()) * phys_dims[0] / n_cells[0] / 4
     )
     g.nodes[1, internal_nodes] += (
-            np.random.rand(internal_nodes.sum()) * phys_dims[1] / n_cells[1] / 3
+        np.random.rand(internal_nodes.sum()) * phys_dims[1] / n_cells[1] / 3
     )
     gb: pp.GridBucket = pp.meshing._assemble_in_bucket([[g]])
     return gb, box
@@ -79,6 +81,7 @@ def horizontal_fracture_2d(params: Dict) -> Tuple[pp.GridBucket, Dict]:
 def horizontal_fracture_3d(params):
     simplex = params.get("simplex", False)
     mesh_args = params.get("mesh_args", [2, 2, 2])
-    endpoints = params.get("fracture_endpoints", [0., 1])
-    return pp.grid_buckets_3d.single_horizontal(mesh_args=mesh_args, simplex=simplex, x_coords=endpoints,
-                                                y_coords=endpoints)
+    endpoints = params.get("fracture_endpoints", [0.0, 1])
+    return pp.grid_buckets_3d.single_horizontal(
+        mesh_args=mesh_args, simplex=simplex, x_coords=endpoints, y_coords=endpoints
+    )
