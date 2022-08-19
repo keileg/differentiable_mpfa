@@ -8,7 +8,11 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import scipy.sparse as sps
 from pypardiso import spsolve as pardisosolve
-from utility_functions import extract_line_solutions
+from utility_functions import (
+    extract_line_solutions,
+    load_converged_permeability,
+    store_converged_permeability,
+)
 
 import porepy as pp
 
@@ -42,20 +46,23 @@ class Rock:
 class CommonModel:
     def __init__(self, params: Dict):
         # Common solver parameters:
-        params.update(
-            {
-                "linear_solver": "pypardiso",
-                "max_iterations": 15,
-                "nl_convergence_tol": 1e-12,
-                "nl_divergence_tol": 1e5,
-                "use_ad": True,
-            }
-        )
+        default_params = {
+            "linear_solver": "pypardiso",
+            "max_iterations": 24,
+            "nl_divergence_tol": 1e5,
+            "use_ad": True,
+            "nl_convergence_tol": 1e-12,
+        }
+        for key, val in default_params.items():
+            if key not in params:
+                params[key] = val
         super().__init__(params)
         self.rock = Rock(params.get("mu", 1), params.get("lambda", 1))
         self.fluid = params.get("fluid", pp.UnitFluid())
         self._solutions = []
         self._residuals = []
+        self._permeability_errrors_nd = []
+        self._permeability_errrors_frac = []
         self._export_times = []
         self.time = 0
         self.time_index = 0
@@ -65,24 +72,28 @@ class CommonModel:
                 self.residual_list.append([])
 
     def create_grid(self) -> None:
-        """Create the grid bucket.
+        """Create the mixed-dimensional grid.
 
         A unit square grid with no fractures is assigned by default.
 
         The method assigns the following attributes to self:
-            gb (pp.GridBucket): The produced grid bucket.
+            mdg (pp.MixedDimensionalGrid): The produced mixed-dimensional grid.
             box (dict): The bounding box of the domain, defined through minimum and
                 maximum values in each dimension.
         """
-        gb, box = self.params["grid_method"](self.params)
+        mdg, box = self.params["grid_method"](self.params)
         self.box: Dict = box
-        self.gb: pp.GridBucket = gb
-        self.gb.compute_geometry()
-        self._Nd = self.gb.dim_max()
-        pp.contact_conditions.set_projections(self.gb)
+        self.mdg: pp.MixedDimensionalGrid = mdg
+        self.mdg.compute_geometry()
+        self.nd = self.mdg.dim_max()
+        pp.contact_conditions.set_projections(self.mdg)
 
     def _is_nonlinear_problem(self):
         return True
+
+    def prepare_simulation(self):
+        super().prepare_simulation()
+        load_converged_permeability(self)
 
     def _flux(self, subdomains: List[pp.Grid]) -> pp.ad.Operator:
         try:
@@ -91,7 +102,7 @@ class CommonModel:
         except AttributeError:
             key = self.parameter_key
             var = self.variable
-        if self.params.get("use_tpfa", False) or self.gb.dim_max() == 1:
+        if self.params.get("use_tpfa", False) or self.mdg.dim_max() == 1:
             base_discr = pp.ad.TpfaAd(key, subdomains)
         else:
             base_discr = pp.ad.MpfaAd(key, subdomains)
@@ -99,8 +110,8 @@ class CommonModel:
         p = self._ad.pressure
 
         flux_function = pp.ad.DifferentiableFVAd(
-            grid_list=subdomains,
-            gb=self.gb,
+            subdomains=subdomains,
+            mdg=self.mdg,
             base_discr=base_discr,
             dof_manager=self.dof_manager,
             permeability_function=self._permeability_function_ad,
@@ -115,12 +126,12 @@ class CommonModel:
         bc_values = pp.ad.ParameterArray(
             key,
             array_keyword="bc_values",
-            grids=subdomains,
+            subdomains=subdomains,
         )
         vector_source_subdomains = pp.ad.ParameterArray(
             param_keyword=key,
             array_keyword="vector_source",
-            grids=subdomains,
+            subdomains=subdomains,
         )
         flux: pp.ad.Operator = (
             flux_function.flux()
@@ -140,7 +151,7 @@ class CommonModel:
 
     def before_newton_iteration(self) -> None:
         self._set_parameters()
-        self._ad.dummy_eq_for_discretization.discretize(self.gb)
+        self._ad.dummy_eq_for_discretization.discretize(self.mdg)
 
     def after_newton_iteration(self, solution_vector: np.ndarray) -> None:
         """
@@ -158,9 +169,19 @@ class CommonModel:
         self.dof_manager.distribute_variable(
             values=solution_vector, additive=self._use_ad, to_iterate=True
         )
-
-        for g, d in self.gb:
-            d[pp.STATE]["permeability"] = self._permeability(g)
+        for sd, data in self.mdg.subdomains(return_data=True):
+            data[pp.STATE]["permeability"] = self._permeability(sd)
+            perm_errors = np.inf
+            do_compute = self.params.get("compute_permeability_errors", True)
+            if do_compute and "converged_permeability" in data[pp.PARAMETERS]["flow"]:
+                perm_errors = np.linalg.norm(
+                    data[pp.PARAMETERS]["flow"]["converged_permeability"]
+                    - data[pp.STATE]["permeability"]
+                )
+            if sd.dim == self.nd:
+                self._permeability_errrors_nd.append(perm_errors)
+            else:
+                self._permeability_errrors_frac.append(perm_errors)
         extract_line_solutions(self)
 
     def assemble_and_solve_linear_system(self, tol: float) -> np.ndarray:
@@ -205,7 +226,7 @@ class CommonModel:
                 iteration.
             init_solution (np.array): Solution obtained from the previous time-step.
             nl_params (dict): Dictionary of parameters used for the convergence check.
-                Which items are required will depend on the converegence test to be
+                Which items are required will depend on the convergence test to be
                 implemented.
 
         Returns:
@@ -247,7 +268,9 @@ class CommonModel:
         self.exporter.write_vtu(data=self._export_names(), time_dependent=True)
 
     def after_simulation(self):
-        self.exporter.write_pvd(self.exporter._exported_time_step_file_names)
+        self.exporter.write_pvd()
+        self._set_parameters()
+        store_converged_permeability(self)
 
     def _power_law_permeability(self, porosity):
         K_0 = self.rock.PERMEABILITY
@@ -272,18 +295,18 @@ class CommonModel:
             pts = np.vstack((pts, np.atleast_2d([[box["zmin"], box["zmax"]]])))
         return pts
 
-    def _domain_center_source(self, g: pp.Grid, val: float) -> np.ndarray:
-        vals = np.zeros(g.num_cells)
+    def _domain_center_source(self, sd: pp.Grid, val: float) -> np.ndarray:
+        vals = np.zeros(sd.num_cells)
         # if g.dim == self._Nd - 1:
         domain_corners = self.box_to_points()
 
         pt = np.zeros((3, 1))
         # Compute domain center
-        pt[: self._Nd] = np.reshape(np.mean(domain_corners, axis=1), (self._Nd, 1))
+        pt[: self.nd] = np.reshape(np.mean(domain_corners, axis=1), (self.nd, 1))
         # Translate a tiny distance to make determination unique in case of even
         # number of Cartesian cells
         pt -= 1e-10
-        ind = g.closest_cell(pt)
+        ind = sd.closest_cell(pt)
         vals[ind[0]] = val
         return vals
 
@@ -292,9 +315,9 @@ class NonlinearIncompressibleFlow(CommonModel, pp.IncompressibleFlow):
     def _export_names(self):
         return [self.variable]
 
-    def _permeability(self, g: pp.Grid):
-        p = self.dof_manager.assemble_variable([g], self.variable, from_iterate=True)[
-            self.dof_manager.grid_and_variable_to_dofs(g, self.variable)
+    def _permeability(self, sd: pp.Grid):
+        p = self.dof_manager.assemble_variable([sd], self.variable, from_iterate=True)[
+            self.dof_manager.grid_and_variable_to_dofs(sd, self.variable)
         ]
         return self._permeability_function(p)
 
@@ -327,26 +350,26 @@ class Chemistry(NonlinearIncompressibleFlow):
         """Initial condition for all primary variables and the parameter representing the
         secondary flux variable (needs to be present for first call to upwind discretization).
         """
-        for g, d in self.gb:
+        for sd, data in self.mdg.subdomains(return_data=True):
             state = {
-                self.component_a_variable: self._initial_a(g),
-                self.component_c_variable: self._initial_c(g),
-                self.variable: self._initial_pressure(g),
+                self.component_a_variable: self._initial_a(sd),
+                self.component_c_variable: self._initial_c(sd),
+                self.variable: self._initial_pressure(sd),
             }
-            d[pp.STATE] = state
-            d[pp.STATE][pp.ITERATE] = state.copy()
+            data[pp.STATE] = state
+            data[pp.STATE][pp.ITERATE] = state.copy()
             pp.initialize_data(
-                g, d, self.a_parameter_key, {"darcy_flux": np.zeros(g.num_faces)}
+                sd, data, self.a_parameter_key, {"darcy_flux": np.zeros(sd.num_faces)}
             )
 
     def _assign_variables(self) -> None:
         """
-        Assign primary variables to the nodes and edges of the grid bucket.
+        Assign primary variables to the subdomains and interfaces of the mixed-dimensional grid.
         """
         super()._assign_variables()
-        # First for the nodes
-        for g, d in self.gb:
-            d[pp.PRIMARY_VARIABLES].update(
+        # First for the subdomains
+        for sd, data in self.mdg.subdomains(return_data=True):
+            data[pp.PRIMARY_VARIABLES].update(
                 {
                     self.component_a_variable: {"cells": 1},
                     self.component_c_variable: {"cells": 1},
@@ -356,34 +379,33 @@ class Chemistry(NonlinearIncompressibleFlow):
     def _create_ad_variables(self) -> None:
         """Create the merged variables for potential and mortar flux"""
         pp.IncompressibleFlow._create_ad_variables(self)
-        grid_list = [g for g, _ in self.gb.nodes()]
         self._ad.component_a = self._eq_manager.merge_variables(
-            [(g, self.component_a_variable) for g in grid_list]
+            [(sd, self.component_a_variable) for sd in self.mdg.subdomains()]
         )
         self._ad.component_c = self._eq_manager.merge_variables(
-            [(g, self.component_c_variable) for g in grid_list]
+            [(sd, self.component_c_variable) for sd in self.mdg.subdomains()]
         )
         self.permeability_argument = self._ad.component_c
 
-    def _permeability(self, g: pp.Grid):
-        phi = self._porosity(g)
+    def _permeability(self, sd: pp.Grid):
+        phi = self._porosity(sd)
         return self._power_law_permeability(phi)
 
-    def _porosity(self, g):
-        params = self.gb.node_props(g)[pp.PARAMETERS][self.c_parameter_key]
+    def _porosity(self, sd):
+        params = self.mdg.subdomain_data(sd)[pp.PARAMETERS][self.c_parameter_key]
         rho_c = params["density_inv"]
         phi_0 = params["reference_porosity"]
 
         # Is this the wanted behaviour of assemble_variable, EK?
         concentration_c = self.dof_manager.assemble_variable(
-            [g], self.component_c_variable, from_iterate=True
-        )[self.dof_manager.grid_and_variable_to_dofs(g, self.component_c_variable)]
+            [sd], self.component_c_variable, from_iterate=True
+        )[self.dof_manager.grid_and_variable_to_dofs(sd, self.component_c_variable)]
         # TODO: fix ad division
         phi = phi_0 * (1 - concentration_c * rho_c)
         return phi
 
     def _permeability_function_ad(self, concentration_c: pp.ad.Ad_array):
-        subdomains = [g for g, _ in self.gb]
+        subdomains = self.mdg.subdomains()
 
         rho_c = pp.ad.ParameterMatrix(
             self.c_parameter_key,
@@ -396,13 +418,13 @@ class Chemistry(NonlinearIncompressibleFlow):
             "reference_porosity",
             subdomains,
             name="phi_0",
-        ).parse(self.gb)
+        ).parse(self.mdg)
         phi_0a = pp.ad.ParameterArray(
             self.c_parameter_key,
             "reference_porosity",
             subdomains,
             name="phi_0",
-        ).parse(self.gb)
+        ).parse(self.mdg)
         # phi_0 = pp.ad.Ad_array(phi_0, sps.csr_matrix(concentration_c.jac.shape))
         phi = (-1) * phi_0m * (
             rho_c * concentration_c
@@ -412,7 +434,7 @@ class Chemistry(NonlinearIncompressibleFlow):
 
     def _porosity_ad(self, concentration_c, rho_c, phi_0):
         # return phi_0 * (1 - rho_c * concentration_c)
-        subdomains = [g for g, _ in self.gb]
+        subdomains = self.mdg.subdomains()
 
         phi_0a = pp.ad.ParameterArray(
             self.c_parameter_key,
@@ -465,10 +487,10 @@ class Chemistry(NonlinearIncompressibleFlow):
 
         self._ad.time_step = pp.ad.Scalar(self.time_step, "time_step")
         transport_equation_a: pp.ad.Operator = self._subdomain_transport_equation(
-            self.grid_list, component="a"
+            self._ad.subdomains, component="a"
         )
         mass_equation_c: pp.ad.Operator = self._precipitate_mass_equation(
-            self.grid_list, dissolved_components=["a"]
+            self._ad.subdomains, dissolved_components=["a"]
         )
         # Assign equations to manager
         self._eq_manager.name_and_assign_equations(
@@ -563,7 +585,7 @@ class Chemistry(NonlinearIncompressibleFlow):
         equilibrium_constant_inv = pp.ad.ParameterMatrix(
             param_keyword=self.c_parameter_key,
             array_keyword="equilibrium_constant_inv",
-            grids=subdomains,
+            subdomains=subdomains,
         )
         product = 1
         for component in dissolved_components:
@@ -618,7 +640,7 @@ class Chemistry(NonlinearIncompressibleFlow):
         source = pp.ad.ParameterArray(
             param_keyword=key,
             array_keyword="source",
-            grids=subdomains,
+            subdomains=subdomains,
         )
 
         rho_c = pp.ad.ParameterMatrix(
@@ -634,7 +656,7 @@ class Chemistry(NonlinearIncompressibleFlow):
             name="phi_0",
         )
 
-        div = pp.ad.Divergence(grids=subdomains)
+        div = pp.ad.Divergence(subdomains=subdomains)
 
         # Accumulation term on the fractures.
         accumulation = (
@@ -651,11 +673,11 @@ class Chemistry(NonlinearIncompressibleFlow):
     def before_newton_iteration(self):
         super().before_newton_iteration()
         self.compute_fluxes()
-        self._ad.dummy_upwind_for_discretization_a.discretize(self.gb)
+        self._ad.dummy_upwind_for_discretization_a.discretize(self.mdg)
 
     def compute_fluxes(self) -> None:
         pp.fvutils.compute_darcy_flux(
-            self.gb,
+            self.mdg,
             keyword=self.parameter_key,
             keyword_store=self.a_parameter_key,
             d_name="darcy_flux",
@@ -683,42 +705,42 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
         super()._set_scalar_parameters()
         self._bc_map = {}
 
-        for g, d in self.gb:
-            specific_volume = self._specific_volume(g)
+        for sd, data in self.mdg.subdomains(return_data=True):
+            specific_volume = self._specific_volume(sd)
 
             comp = self.fluid.COMPRESSIBILITY
-            porosity = self._porosity(g)
-            phi_0 = self.rock.POROSITY * np.ones(g.num_cells)
-            alpha = self._biot_alpha(g)
+            porosity = self._porosity(sd)
+            phi_0 = self.rock.POROSITY * np.ones(sd.num_cells)
+            alpha = self._biot_alpha(sd)
             bulk = pp.params.rock.bulk_from_lame(self.rock.LAMBDA, self.rock.MU)
             new_params = {}
-            if g.dim == self._Nd:
+            if sd.dim == self.nd:
                 mass_weight = (
                     porosity * comp + (alpha - phi_0) / bulk
                 ) * self.scalar_scale
                 new_params.update(
                     {
-                        "N_inverse": (self._biot_alpha(g) - phi_0) / bulk,
+                        "N_inverse": (self._biot_alpha(sd) - phi_0) / bulk,
                         "phi_reference": phi_0,
                     }
                 )
             else:
                 mass_weight = porosity * comp * self.scalar_scale
             new_params.update({"mass_weight": mass_weight * specific_volume})
-            parameters = d[pp.PARAMETERS][self.scalar_parameter_key]
+            parameters = data[pp.PARAMETERS][self.scalar_parameter_key]
             parameters.update(new_params)
-            self._bc_map[g] = {
+            self._bc_map[sd] = {
                 "type": parameters["bc"],
                 "values": parameters["bc_values"],
             }
 
-    def _stiffness_tensor(self, g: pp.Grid) -> pp.FourthOrderTensor:
+    def _stiffness_tensor(self, sd: pp.Grid) -> pp.FourthOrderTensor:
         """Fourth order stress tensor.
 
 
         Parameters
         ----------
-        g : pp.Grid
+        sd : pp.Grid
             Matrix grid.
 
         Returns
@@ -727,20 +749,20 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
             Cell-wise representation of the stress tensor.
 
         """
-        lam = self.rock.LAMBDA * np.ones(g.num_cells)
-        mu = self.rock.MU * np.ones(g.num_cells)
+        lam = self.rock.LAMBDA * np.ones(sd.num_cells)
+        mu = self.rock.MU * np.ones(sd.num_cells)
         return pp.FourthOrderTensor(mu, lam)
 
-    def _permeability(self, g: pp.Grid):
-        if g.dim == self._Nd:
-            phi = self._porosity(g)
+    def _permeability(self, sd: pp.Grid):
+        if sd.dim == self.nd:
+            phi = self._porosity(sd)
             vals = self._power_law_permeability(phi)
         else:
-            vals = self._aperture(g) ** 2
+            vals = self._aperture(sd) ** 2
         return vals
 
-    def _initial_pressure(self, g):
-        return np.zeros(g.num_cells)
+    def _initial_pressure(self, sd):
+        return np.zeros(sd.num_cells)
 
     def _porosity_ad(self, subdomain):
         # Matrix porosity
@@ -749,35 +771,33 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
         one_by_n = pp.ad.ParameterMatrix(
             param_keyword=self.scalar_parameter_key,
             array_keyword="N_inverse",
-            grids=subdomain,
+            subdomains=subdomain,
         )
         p_0 = pp.ad.ParameterArray(
             param_keyword=self.mechanics_parameter_key,
             array_keyword="p_reference",
-            grids=subdomain,
+            subdomains=subdomain,
         )
         phi_0 = pp.ad.ParameterArray(
             param_keyword=self.scalar_parameter_key,
             array_keyword="phi_reference",
-            grids=subdomain,
+            subdomains=subdomain,
         )
         phi = phi_0 + self._div_u(subdomain) + one_by_n * (p - p_0)
         return phi
 
-    def _porosity(self, g):
-        if g.dim < self._Nd:
-            vals = np.ones(g.num_cells)
+    def _porosity(self, sd):
+        if sd.dim < self.nd:
+            vals = np.ones(sd.num_cells)
         elif self.time_index == 0 and self._nonlinear_iteration == 0:
-            vals = self.rock.POROSITY * np.ones(g.num_cells)
+            vals = self.rock.POROSITY * np.ones(sd.num_cells)
         else:
-            vals = self._porosity_ad([g]).evaluate(self.dof_manager).val
+            vals = self._porosity_ad([sd]).evaluate(self.dof_manager).val
         return vals
 
     def _permeability_function_ad(self, var: pp.ad.Ad_array):
-        phi = self._porosity_ad([self._nd_grid()]).evaluate(self.dof_manager)
-        fracture_subdomains: List[pp.Grid] = self.gb.grids_of_dimension(
-            self._Nd - 1
-        ).tolist()
+        phi = self._porosity_ad([self._nd_subdomain()]).evaluate(self.dof_manager)
+        fracture_subdomains: List[pp.Grid] = self.mdg.subdomains(dim=self.nd - 1)
         u_n = self._ad.normal_component_frac * self._displacement_jump(
             fracture_subdomains
         )
@@ -787,7 +807,7 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
             fracture_subdomains
         ).evaluate(self.dof_manager)
         prolongation_matrix = self._ad.subdomain_projections_scalar.cell_prolongation(
-            [self._nd_grid()]
+            [self._nd_subdomain()]
         ).evaluate(self.dof_manager)
         frac = u_n * u_n * u_n
         val = (
@@ -798,7 +818,7 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
 
     def _fluid_flux(self, subdomains: List[pp.Grid]) -> pp.ad.Operator:
 
-        if self.params.get("use_tpfa", False) or self.gb.dim_max() == 1:
+        if self.params.get("use_tpfa", False) or self.mdg.dim_max() == 1:
             base_discr = pp.ad.TpfaAd(self.scalar_parameter_key, subdomains)
         else:
             base_discr = pp.ad.MpfaAd(self.scalar_parameter_key, subdomains)
@@ -806,8 +826,8 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
 
         p = self._ad.pressure
         differentiated_tpfa = pp.ad.DifferentiableFVAd(
-            grid_list=subdomains,
-            gb=self.gb,
+            subdomains=subdomains,
+            mdg=self.mdg,
             base_discr=base_discr,
             dof_manager=self.dof_manager,
             permeability_function=self._permeability_function_ad,
@@ -820,12 +840,12 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
         bc_values = pp.ad.ParameterArray(
             self.scalar_parameter_key,
             array_keyword="bc_values",
-            grids=subdomains,
+            subdomains=subdomains,
         )
         vector_source_subdomains = pp.ad.ParameterArray(
             param_keyword=self.scalar_parameter_key,
             array_keyword="vector_source",
-            grids=subdomains,
+            subdomains=subdomains,
         )
         flux: pp.ad.Operator = (
             differentiated_tpfa.flux()
@@ -847,13 +867,13 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
         bc = pp.ad.ParameterArray(
             self.scalar_parameter_key,
             array_keyword="bc_values",
-            grids=subdomains,
+            subdomains=subdomains,
         )
 
         vector_source_subdomains = pp.ad.ParameterArray(
             param_keyword=self.scalar_parameter_key,
             array_keyword="vector_source",
-            grids=subdomains,
+            subdomains=subdomains,
         )
         p_primary = (
             flux_discr.bound_pressure_cell * self._ad.pressure
@@ -867,19 +887,19 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
         )
         return p_primary
 
-    def _aperture(self, g: pp.Grid) -> np.ndarray:
+    def _aperture(self, sd: pp.Grid) -> np.ndarray:
         """
         Aperture is a characteristic thickness of a cell, with units [m].
         1 in matrix, thickness of fractures and "side length" of cross-sectional
         area/volume (or "specific volume") for intersections of co-dimension 2 and 3.
         See also specific_volume.
         """
-        aperture = np.ones(g.num_cells)
-        if g.dim < self._Nd:
-            data_edge = self.gb.edge_props((g, self._nd_grid()))
-            proj = self.gb.node_props(g)["tangential_normal_projection"]
-            u_j = self.reconstruct_local_displacement_jump(data_edge, proj)
-            aperture = np.max(np.vstack((u_j[-1], self._initial_gap(g))), axis=0)
+        aperture = np.ones(sd.num_cells)
+        if sd.dim < self.nd:
+            intf = self.mdg.subdomain_pair_to_interface((sd, self._nd_subdomain()))
+            proj = self.mdg.subdomain_data(sd)["tangential_normal_projection"]
+            u_j = self.reconstruct_local_displacement_jump(intf, proj)
+            aperture = np.max(np.vstack((u_j[-1], self._initial_gap(sd))), axis=0)
         return aperture
 
     def _initial_condition(self):
@@ -887,12 +907,12 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
         secondary flux variable (needs to be present for first call to upwind discretization).
         """
         super()._initial_condition()
-        for g, d in self.gb:
+        for sd, data in self.mdg.subdomains(return_data=True):
             state = {
-                self.scalar_variable: self._initial_pressure(g),
+                self.scalar_variable: self._initial_pressure(sd),
             }
-            d[pp.STATE].update(state)
-            d[pp.STATE][pp.ITERATE].update(state.copy())
+            data[pp.STATE].update(state)
+            data[pp.STATE][pp.ITERATE].update(state.copy())
 
     def after_newton_iteration(self, solution_vector: np.ndarray) -> None:
         """Prepare for plotting of displacements.
@@ -905,16 +925,16 @@ class BiotNonlinearTpfa(CommonModel, pp.ContactMechanicsBiot):
 
         """
         super().after_newton_iteration(solution_vector)
-        nd = self._Nd
-        for g, d in self.gb:
-            displacements = np.zeros((3, g.num_cells))
-            if g.dim == nd:
-                displacements[:nd] = d[pp.STATE][pp.ITERATE][
+        nd = self.nd
+        for sd, data in self.mdg.subdomains(return_data=True):
+            displacements = np.zeros((3, sd.num_cells))
+            if sd.dim == nd:
+                displacements[:nd] = data[pp.STATE][pp.ITERATE][
                     self.displacement_variable
-                ].reshape((nd, g.num_cells), order="F")
+                ].reshape((nd, sd.num_cells), order="F")
 
-            d[pp.STATE]["displacements"] = displacements
-            d[pp.STATE]["aperture"] = self._aperture(g)
+            data[pp.STATE]["displacements"] = displacements
+            data[pp.STATE]["aperture"] = self._aperture(sd)
 
     def _export_names(self):
         return [self.scalar_variable, "displacements", "aperture", "permeability"]

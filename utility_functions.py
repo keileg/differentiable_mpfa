@@ -1,3 +1,4 @@
+import pickle
 from typing import Dict, Tuple
 
 import matplotlib
@@ -8,13 +9,98 @@ from matplotlib import pyplot as plt
 import porepy as pp
 
 matplotlib.use("Qt5Agg")
+plt.rc("font", size=15)
+legend_fontsize = 12
+
+
+def read_pickle(fn: str):
+    f = open(fn, "rb")
+    content = pickle.load(f)
+    f.close()
+    return content
+
+
+def write_pickle(content, fn: str):
+    f = open(fn, "wb")
+    pickle.dump(content, f)
+    f.close()
+
+
+def store_converged_permeability(model):
+    perm_dict = dict()
+    for sd, data in model.mdg.subdomains(return_data=True):
+        perm_dict[sd.dim] = data[pp.PARAMETERS]["flow"]["second_order_tensor"].values[
+            0, 0
+        ]
+    write_pickle(perm_dict, "converged_permeabilities/" + model.params["file_name"])
+
+
+def load_converged_permeability(model):
+    fn = "converged_permeabilities/" + model.params["file_name"]
+    try:
+        perm_dict = read_pickle(fn)
+    except:
+        perm_dict = {}
+        for sd in model.mdg.subdomains():
+            perm_dict[sd.dim] = np.inf
+
+    model.converged_permeabilities = perm_dict
+    for sd, data in model.mdg.subdomains(return_data=True):
+        data[pp.PARAMETERS]["flow"]["converged_permeability"] = perm_dict[sd.dim]
+
+
+def plot_permeability_errors(
+    m_nonlin, m_lin, color=None, nd=True, use_fn_label=True, model_type="both"
+):
+    if nd:
+        vals_lin = m_lin._permeability_errrors_nd[:-1]
+        vals_nonlin = m_nonlin._permeability_errrors_nd[:-1]
+    else:
+        vals_lin = m_lin._permeability_errrors_frac[:-1]
+        vals_nonlin = m_nonlin._permeability_errrors_frac[:-1]
+    iterations = np.arange(1, 1 + len(vals_lin))
+    iterations_nonl = np.arange(1, 1 + len(vals_nonlin))
+    if use_fn_label:
+        label = m_lin.params["file_name"]
+    else:
+        label = "diff"
+    if model_type != "linear":
+        plt.semilogy(
+            iterations_nonl,
+            vals_nonlin,
+            label=label,
+            ls="--",
+            color=color,
+            linewidth=2,
+        )
+    if not use_fn_label:
+        label = "non-diff"
+    if model_type != "nonlinear":
+        plt.semilogy(
+            iterations, vals_lin, label=label, ls="-", color=color, linewidth=2
+        )
+    ax = plt.gca()
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Permeability error norm")
+    # Indicate convergence order
+    plt.legend(
+        title=m_lin.params.get("legend_title", None),
+        loc="upper right",
+        fontsize=legend_fontsize,
+        title_fontsize=legend_fontsize,
+    )
+    plt.tight_layout()
+    fn_root = "images/permeability_errors_"
+    if not nd:
+        fn_root += "frac_"
+    plt.savefig(fname=fn_root + m_nonlin.params["plotting_file_name"])
 
 
 def plot_convergence(
     m_nonlin, m_lin, color=None, plot_errors=False, use_fn_label=True, model_type="both"
 ):
-    iterations = np.arange(len(m_lin._residuals))
-    iterations_nonl = np.arange(len(m_nonlin._residuals))
+    iterations = np.arange(1, len(m_lin._residuals) + 1)
+    iterations_nonl = np.arange(1, len(m_nonlin._residuals) + 1)
     if use_fn_label:
         label = m_lin.params["file_name"]
     else:
@@ -26,34 +112,40 @@ def plot_convergence(
             label=label,
             ls="--",
             color=color,
-            marker="x",
+            linewidth=2,
         )
     if not use_fn_label:
         label = "non-diff"
     if model_type != "nonlinear":
         plt.semilogy(
-            iterations, m_lin._residuals, label=label, ls="-", color=color, marker="+"
+            iterations, m_lin._residuals, label=label, ls="-", color=color, linewidth=2
         )
     ax = plt.gca()
     ax.set_xlabel("Iteration")
     ax.set_ylabel("Residual norm")
     # Indicate convergence order
-    plt.legend(title=m_lin.params.get("legend_title", None), loc="upper right")
+    plt.legend(
+        title=m_lin.params.get("legend_title", None),
+        loc="upper right",
+        fontsize=legend_fontsize,
+        title_fontsize=legend_fontsize,
+    )
+    plt.tight_layout()
     plt.savefig(fname="images/residuals_" + m_nonlin.params["plotting_file_name"])
-    if plot_errors:
-        plt.figure()
-        p_analytical = m_nonlin.p_analytical()
-        e_nonlin = [
-            np.linalg.norm(p_num - p_analytical) for p_num in m_nonlin._solutions
-        ]
-        e_lin = [np.linalg.norm(p_num - p_analytical) for p_num in m_lin._solutions]
 
-        plt.semilogy(iterations, e_lin, label="linear")
-        plt.semilogy(iterations_nonl, e_nonlin, label="nonlinear")
-        ax = plt.gca()
-        ax.set_xlabel("Iteration")
-        ax.set_ylabel("Error (not normalized)")
-        plt.legend()
+
+# p_analytical = m_nonlin.p_analytical()
+#         e_nonlin = [
+#             np.linalg.norm(p_num - p_analytical) for p_num in m_nonlin._solutions
+#         ]
+#         e_lin = [np.linalg.norm(p_num - p_analytical) for p_num in m_lin._solutions]
+#
+#         plt.semilogy(iterations, e_lin, label="linear")
+#         plt.semilogy(iterations_nonl, e_nonlin, label="nonlinear")
+#         ax = plt.gca()
+#         ax.set_xlabel("Iteration")
+#         ax.set_ylabel("Error (not normalized)")
+#         plt.legend(fontsize=legend_fontsize)
 
 
 def run_simulation_pairs_varying_parameters(
@@ -88,6 +180,16 @@ def run_simulation_pairs_varying_parameters(
         i += 1
 
 
+def plot_all_permeability_errors(update_params):
+    line_colors = ["blue", "orange", "green", "red", "purple", "brown"]
+    i = 0
+    plt.figure()
+    for key in update_params.keys():
+        m_lin, m_nonlin = update_params[key]["models"]
+        plot_permeability_errors(m_nonlin, m_lin, color="tab:" + line_colors[i])
+        i += 1
+
+
 def plot_multiple_time_steps(
     updates: Dict, n_steps: int, use_fn_label: bool = True, model_type: str = "both"
 ):
@@ -108,7 +210,7 @@ def plot_multiple_time_steps(
     line_colors = ["blue", "orange", "green", "red", "purple", "brown"]
 
     for time_step in range(n_steps):
-        plt.figure()
+        plt.figure(figsize=(5, 4))
         for i, name in enumerate(updates.keys()):
             linear_model, nonlinear_model = updates[name]["models"]
             nonlinear_model._residuals = nonlinear_model.residual_list[time_step]
@@ -159,6 +261,7 @@ def run_linear_and_nonlinear(
         color=plot_color,
         use_fn_label=use_fn_label,
     )
+
     # for m in ["linear", "nonlinear"]:
     #     fname = "images/iterations/permeabilities_" + nonlinear_model.params["plotting_file_name"] + m
     #     plot_line_solutions(nonlinear_model, linear_model, model_type=m, fname=fname)
@@ -170,23 +273,23 @@ def extract_line_solutions(model):
         model.iteration_permeability = []
         model.iteration_pressure = []
         model.iteration_c = []
-    for g, d in model.gb:
+    for sd, data in model.mdg.subdomains(return_data=True):
         cell_inds = np.logical_and(
-            np.isclose(g.cell_centers[2], 0.5), np.isclose(g.cell_centers[1], 0.5)
+            np.isclose(sd.cell_centers[2], 0.5), np.isclose(sd.cell_centers[1], 0.5)
         )
         if np.any(cell_inds):
-            model.iteration_permeability.append(model._permeability(g)[cell_inds])
+            model.iteration_permeability.append(model._permeability(sd)[cell_inds])
             if hasattr(model, "variable"):
                 model.iteration_pressure.append(
-                    d[pp.STATE][pp.ITERATE][model.variable][cell_inds]
+                    data[pp.STATE][pp.ITERATE][model.variable][cell_inds]
                 )
             else:
                 model.iteration_pressure.append(
-                    d[pp.STATE][pp.ITERATE][model.scalar_variable][cell_inds]
+                    data[pp.STATE][pp.ITERATE][model.scalar_variable][cell_inds]
                 )
             if hasattr(model, "variable"):
                 model.iteration_c.append(
-                    d[pp.STATE][pp.ITERATE][model.component_c_variable][cell_inds]
+                    data[pp.STATE][pp.ITERATE][model.component_c_variable][cell_inds]
                 )
 
 
@@ -198,11 +301,11 @@ def plot_line_solutions(m_nonlin, m_lin, color=None, model_type="both", fname=No
     vals_nonl = m_nonlin.iteration_pressure[from_iteration:]
     vals_lin = m_lin.iteration_pressure[from_iteration:]
     difference = True
-    for g, d in m_lin.gb:
+    for sd, data in m_lin.mdg.subdomains(return_data=True):
         cell_inds = np.logical_and(
-            np.isclose(g.cell_centers[2], 0.5), np.isclose(g.cell_centers[1], 0.5)
+            np.isclose(sd.cell_centers[2], 0.5), np.isclose(sd.cell_centers[1], 0.5)
         )
-        x = g.cell_centers[0, cell_inds]
+        x = sd.cell_centers[0, cell_inds]
 
     c_min = np.inf
     c_max = -np.inf
@@ -240,7 +343,11 @@ def plot_line_solutions(m_nonlin, m_lin, color=None, model_type="both", fname=No
             ax.set_ylabel("K")
             plt.ylim(c_min, c_max)
             # Indicate convergence order
-            plt.legend(title=m_lin.params.get("legend_title", None), loc="upper right")
+            plt.legend(
+                title=m_lin.params.get("legend_title", None),
+                loc="upper right",
+                fontsize=legend_fontsize,
+            )
             # if fname is None:
             fname = (
                 "images/iterations/permeabilities_nonlinear"
@@ -279,7 +386,11 @@ def plot_line_solutions(m_nonlin, m_lin, color=None, model_type="both", fname=No
             plt.ylim(c_min, c_max)
 
             # Indicate convergence order
-            plt.legend(title=m_lin.params.get("legend_title", None), loc="upper right")
+            plt.legend(
+                title=m_lin.params.get("legend_title", None),
+                loc="upper right",
+                fontsize=legend_fontsize,
+            )
             # if fname is None:
             fname = (
                 "images/iterations/permeabilities_linear"
