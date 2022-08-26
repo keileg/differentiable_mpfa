@@ -93,7 +93,8 @@ class CommonModel:
 
     def prepare_simulation(self):
         super().prepare_simulation()
-        load_converged_permeability(self)
+        if self.params.get("compute_permeability_errors", False):
+            load_converged_permeability(self)
 
     def _flux(self, subdomains: List[pp.Grid]) -> pp.ad.Operator:
         try:
@@ -177,7 +178,7 @@ class CommonModel:
                 perm_errors = np.linalg.norm(
                     data[pp.PARAMETERS]["flow"]["converged_permeability"]
                     - data[pp.STATE]["permeability"]
-                )
+                ) / np.sqrt(data[pp.STATE]["permeability"].size)
             if sd.dim == self.nd:
                 self._permeability_errrors_nd.append(perm_errors)
             else:
@@ -443,6 +444,7 @@ class Chemistry(NonlinearIncompressibleFlow):
             name="phi_0",
         )
         val = (-1) * phi_0 * (rho_c * concentration_c) + phi_0a
+        # val = phi_0a - concentration_c
         return val
 
     def _advective_flux(
@@ -483,14 +485,14 @@ class Chemistry(NonlinearIncompressibleFlow):
 
     def _assign_equations(self) -> None:
         """Define equations through discretizations."""
-        NonlinearIncompressibleFlow._assign_equations(self)
 
-        self._ad.time_step = pp.ad.Scalar(self.time_step, "time_step")
+        self._assign_flow_equations()
+        subdomains = self._ad.subdomains
         transport_equation_a: pp.ad.Operator = self._subdomain_transport_equation(
-            self._ad.subdomains, component="a"
+            subdomains, component="a"
         )
         mass_equation_c: pp.ad.Operator = self._precipitate_mass_equation(
-            self._ad.subdomains, dissolved_components=["a"]
+            subdomains, dissolved_components=["a"]
         )
         # Assign equations to manager
         self._eq_manager.name_and_assign_equations(
@@ -499,6 +501,29 @@ class Chemistry(NonlinearIncompressibleFlow):
                 "subdomain_mass_c": mass_equation_c,
             },
         )
+
+    def _assign_flow_equations(self):
+        NonlinearIncompressibleFlow._assign_equations(self)
+        self._ad.time_step = pp.ad.Scalar(self.time_step, "time_step")
+
+        subdomains = self._ad.subdomains
+
+        rho_c = pp.ad.ParameterMatrix(
+            self.c_parameter_key,
+            "density_inv",
+            subdomains,
+            name="rho_0",
+        )
+        phi_0 = pp.ad.ParameterMatrix(
+            self.c_parameter_key,
+            "reference_porosity",
+            subdomains,
+            name="phi_0",
+        )
+        var_c = self._ad.component_c
+        d_phi = self._porosity_ad(var_c, rho_c, phi_0) - self._porosity_ad(var_c.previous_timestep(), rho_c, phi_0)
+        accumulation_term = d_phi / self._ad.time_step
+        # self._eq_manager.equations["subdomain_flow"] += accumulation_term
 
     def _precipitate_mass_equation(
         self, subdomains: List[pp.Grid], dissolved_components
