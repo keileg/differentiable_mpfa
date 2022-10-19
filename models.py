@@ -13,11 +13,9 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import porepy as pp
 
-from utility_functions import (
-    extract_line_solutions,
-    load_converged_permeability,
-    store_converged_permeability,
-)
+from utility_functions import (extract_line_solutions,
+                               load_converged_permeability,
+                               store_converged_permeability)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -47,8 +45,8 @@ class Rock:
 
 
 class CommonModel:
-    """Common for all four models.
-    """
+    """Common for all four models."""
+
     def __init__(self, params: Dict):
         # Common solver parameters:
         default_params = {
@@ -155,8 +153,7 @@ class CommonModel:
         return flux
 
     def before_newton_iteration(self) -> None:
-        """Set parameters and rediscretize.
-        """
+        """Set parameters and rediscretize."""
         self._set_parameters()
         self._ad.dummy_eq_for_discretization.discretize(self.mdg)
 
@@ -284,8 +281,7 @@ class CommonModel:
         self._export_step()
 
     def _export_step(self):
-        """Export the current solution for visualization.
-        """
+        """Export the current solution for visualization."""
         self.exporter._export_constants_separately = False
         self.exporter.write_vtu(data=self._export_names(), time_dependent=True)
 
@@ -349,6 +345,7 @@ class NonlinearIncompressibleFlow(CommonModel, pp.IncompressibleFlow):
     """
     Mass balance for incompressible flow with pressure-dependent permeability.
     """
+
     def _export_names(self) -> list[str]:
         """Fields to be exported
 
@@ -378,6 +375,7 @@ class Chemistry(NonlinearIncompressibleFlow):
     """
     Reactive transport of one dissolved component and one precipitate.
     """
+
     def __init__(self, params: Dict):
         super().__init__(params)
         self.time_step = params["time_step"]
@@ -418,8 +416,7 @@ class Chemistry(NonlinearIncompressibleFlow):
             )
 
     def _assign_variables(self) -> None:
-        """Assign primary variables to the single subdomain of the mixed-dimensional grid.
-        """
+        """Assign primary variables to the single subdomain of the mixed-dimensional grid."""
         super()._assign_variables()
         # First for the subdomains
         for sd, data in self.mdg.subdomains(return_data=True):

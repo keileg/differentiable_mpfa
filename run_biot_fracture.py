@@ -8,10 +8,8 @@ import porepy as pp
 
 from grids import horizontal_fracture_3d
 from models import BiotNonlinearTpfa
-from utility_functions import (
-    plot_multiple_time_steps,
-    run_simulation_pairs_varying_parameters,
-)
+from utility_functions import (plot_multiple_time_steps,
+                               run_simulation_pairs_varying_parameters)
 
 
 class MixedDimParameters:

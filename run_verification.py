@@ -11,12 +11,11 @@ import numpy as np
 import porepy as pp
 import scipy.sparse as sps
 
-from grids import two_dimensional_cartesian, two_dimensional_cartesian_perturbed
+from grids import (two_dimensional_cartesian,
+                   two_dimensional_cartesian_perturbed)
 from models import NonlinearIncompressibleFlow
-from utility_functions import (
-    plot_all_permeability_errors,
-    run_simulation_pairs_varying_parameters,
-)
+from utility_functions import (plot_all_permeability_errors,
+                               run_simulation_pairs_varying_parameters)
 
 
 def sqrt(var):
@@ -41,7 +40,7 @@ class SquareRootPermeability:
         )
         return val * sd.cell_volumes
 
-    def p_analytical(self, sd: Optional[pp.Grid]=None) -> np.ndarray:
+    def p_analytical(self, sd: Optional[pp.Grid] = None) -> np.ndarray:
         """Analytical pressure solution.
 
         Units: m^3 / s
@@ -98,7 +97,7 @@ class SquareRootPermeability:
         self.dof_manager.distribute_variable(vals, to_iterate=True)
 
     def _initial_pressure(self, sd: pp.Grid):
-        val = self.p_analytical(sd) / 2 #(10.1 - np.random.rand(sd.num_cells) / 5)
+        val = self.p_analytical(sd) / 2  # (10.1 - np.random.rand(sd.num_cells) / 5)
         # val = np.ones(sd.num_cells) / 1
         return val
 

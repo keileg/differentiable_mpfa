@@ -8,10 +8,8 @@ import porepy as pp
 
 from grids import three_dimensional_cartesian
 from models import BiotNonlinearTpfa
-from utility_functions import (
-    plot_multiple_time_steps,
-    run_simulation_pairs_varying_parameters,
-)
+from utility_functions import (plot_multiple_time_steps,
+                               run_simulation_pairs_varying_parameters)
 
 
 class SingleDimParameters:
@@ -41,8 +39,8 @@ class SingleDimParameters:
 
 
 class Model(SingleDimParameters, BiotNonlinearTpfa):
-    """Combine parameters and model.
-    """
+    """Combine parameters and model."""
+
     pass
 
 

@@ -252,7 +252,7 @@ class EquilibriumChemistry(Chemistry):
 class LinearPermeability2d:
     """Simple linear permeability for pure flow.
 
-        K(p) = k0 + p
+    K(p) = k0 + p
 
     """
 
@@ -288,4 +288,3 @@ class LinearPermeability2d:
         )
         K = pressure + k0
         return K
-

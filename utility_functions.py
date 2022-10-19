@@ -3,14 +3,12 @@ from typing import Dict, Tuple
 
 import matplotlib
 import numpy as np
+import porepy as pp
 from matplotlib import pyplot as plt
 
-# from mpltools import annotation
-import porepy as pp
-
 matplotlib.use("Qt5Agg")
-plt.rc("font", size=15)
-legend_fontsize = 12
+plt.rc("font", size=16)
+legend_fontsize = 14
 
 
 def read_pickle(fn: str):
@@ -53,11 +51,11 @@ def plot_permeability_errors(
     m_nonlin, m_lin, color=None, nd=True, use_fn_label=True, model_type="both"
 ):
     if nd:
-        vals_lin = m_lin._permeability_errrors_nd[:-1]
-        vals_nonlin = m_nonlin._permeability_errrors_nd[:-1]
+        vals_lin = m_lin._permeability_errors_nd[:-1]
+        vals_nonlin = m_nonlin._permeability_errors_nd[:-1]
     else:
-        vals_lin = m_lin._permeability_errrors_frac[:-1]
-        vals_nonlin = m_nonlin._permeability_errrors_frac[:-1]
+        vals_lin = m_lin._permeability_errors_frac[:-1]
+        vals_nonlin = m_nonlin._permeability_errors_frac[:-1]
     iterations = np.arange(1, 1 + len(vals_lin))
     iterations_nonl = np.arange(1, 1 + len(vals_nonlin))
     if use_fn_label:
@@ -101,10 +99,18 @@ def plot_convergence(
 ):
     iterations = np.arange(1, len(m_lin._residuals) + 1)
     iterations_nonl = np.arange(1, len(m_nonlin._residuals) + 1)
-    if use_fn_label:
+    if "legend_label" in m_lin.params:
+        label = m_lin.params["legend_label"] + "D"
+    elif use_fn_label:
         label = m_lin.params["file_name"]
     else:
         label = "diff"
+
+    if "Tetra" in m_lin.params["file_name"]:
+        marker = "v"
+    else:
+        marker = None
+
     if model_type != "linear":
         plt.semilogy(
             iterations_nonl,
@@ -113,12 +119,23 @@ def plot_convergence(
             ls="--",
             color=color,
             linewidth=2,
+            marker=marker,
+            markersize=7,
         )
     if not use_fn_label:
         label = "non-diff"
     if model_type != "nonlinear":
+        if "legend_label" in m_lin.params:
+            label = label[:-1]
         plt.semilogy(
-            iterations, m_lin._residuals, label=label, ls="-", color=color, linewidth=2
+            iterations,
+            m_lin._residuals,
+            label=label,
+            ls="-",
+            color=color,
+            linewidth=2,
+            marker=marker,
+            markersize=7,
         )
     ax = plt.gca()
     ax.set_xlabel("Iteration")
@@ -191,7 +208,7 @@ def plot_all_permeability_errors(update_params):
 
 
 def plot_multiple_time_steps(
-    updates: Dict, n_steps: int, use_fn_label: bool = True, model_type: str = "both"
+    updates: dict, n_steps: int, use_fn_label: bool = True, model_type: str = "both"
 ):
     """
 
@@ -210,11 +227,12 @@ def plot_multiple_time_steps(
     line_colors = ["blue", "orange", "green", "red", "purple", "brown"]
 
     for time_step in range(n_steps):
-        plt.figure(figsize=(5, 4))
+        plt.figure()
         for i, name in enumerate(updates.keys()):
             linear_model, nonlinear_model = updates[name]["models"]
-            nonlinear_model._residuals = nonlinear_model.residual_list[time_step]
-            linear_model._residuals = linear_model.residual_list[time_step]
+            if hasattr(nonlinear_model, "residual_list"):
+                nonlinear_model._residuals = nonlinear_model.residual_list[time_step]
+                linear_model._residuals = linear_model.residual_list[time_step]
             nonlinear_model.params["plotting_file_name"] = (
                 linear_model.params["plotting_file_name"] + "_" + str(time_step)
             )
@@ -262,9 +280,6 @@ def run_linear_and_nonlinear(
         use_fn_label=use_fn_label,
     )
 
-    # for m in ["linear", "nonlinear"]:
-    #     fname = "images/iterations/permeabilities_" + nonlinear_model.params["plotting_file_name"] + m
-    #     plot_line_solutions(nonlinear_model, linear_model, model_type=m, fname=fname)
     return linear_model, nonlinear_model
 
 
@@ -294,9 +309,6 @@ def extract_line_solutions(model):
 
 
 def plot_line_solutions(m_nonlin, m_lin, color=None, model_type="both", fname=None):
-    # if use_fn_label:
-    #     label = m_lin.params["file_name"]
-    # else:
     from_iteration = 0
     vals_nonl = m_nonlin.iteration_pressure[from_iteration:]
     vals_lin = m_lin.iteration_pressure[from_iteration:]
