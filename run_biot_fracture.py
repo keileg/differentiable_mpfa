@@ -1,4 +1,11 @@
+"""
+Parameters and run script for Section 4.2.3
+"""
+
+
 import numpy as np
+import porepy as pp
+
 from grids import horizontal_fracture_3d
 from models import BiotNonlinearTpfa
 from utility_functions import (
@@ -6,33 +13,46 @@ from utility_functions import (
     run_simulation_pairs_varying_parameters,
 )
 
-import porepy as pp
-
 
 class MixedDimParameters:
     def _initial_gap(self, sd: pp.Grid) -> np.ndarray:
-        return 3e-2 * np.ones(sd.num_cells)
+        """Initial value for the fracture gap.
+
+        Args:
+            sd: Fracture subdomain grid.
+
+        Returns:
+            Cell-wise values.
+
+        """
+        return 2e-2 * np.ones(sd.num_cells)
 
     def _source_scalar(self, sd: pp.Grid) -> np.ndarray:
-        """Homogeneous Dirichlet values except at left end of fracture."""
+        """Injection at center of fracture.
+
+        Args:
+            sd: Subdomain grid.
+
+        Returns:
+            Cell-wise source value.
+
+        """
         val = np.zeros(sd.num_cells)
         if sd.dim == self.nd - 1:
             val = self._domain_center_source(sd, val=self.params["source_value"])
         return val
 
     def _biot_alpha(self, sd: pp.Grid) -> np.ndarray:
-        """Injection at domain center."""
-        return self.params["biot_alpha"] * np.ones(sd.num_cells)
+        """Biot coefficient.
 
-    def after_newton_convergence(
-        self, solution: np.ndarray, errors: float, iteration_counter: int
-    ) -> None:
-        super().after_newton_convergence(solution, errors, iteration_counter)
-        if self.time_index < self.params["n_time_steps"] - 1:
-            self.time_step = 5e-1
-        else:
-            self.time_step = self.end_time - self.time + 1e-10
-        self._ad.time_step._value = self.time_step
+        Args:
+            sd: Grid.
+
+        Returns:
+            Cell-wise Biot coefficient.
+
+        """
+        return self.params["biot_alpha"] * np.ones(sd.num_cells)
 
 
 class Fracture(MixedDimParameters, BiotNonlinearTpfa):
@@ -43,22 +63,24 @@ if __name__ == "__main__":
     nc = 15
     params = {
         "use_tpfa": True,
-        "time_step": 1e5,
-        "end_time": 1e5,
+        "time_manager": pp.TimeManager(
+            schedule=[0, 1e5], dt_init=1e5, constant_dt=True
+        ),
         "plotting_file_name": "biot_fracture",
         "file_name": "biot_fracture",
+        "folder_name": "biot_fracture",
         "grid_method": horizontal_fracture_3d,
         "mesh_args": np.array([nc, nc, nc - 1]),
         "n_time_steps": 1,
         "biot_alpha": 0.2,
         "nl_convergence_tol": 1e-12,
     }
-    k = 1
+    k = 1e-1
     update_params = {
-        "6": {"legend_title": "Source", "source_value": 6 * k},
-        "4": {"source_value": 4 * k},
-        "2": {"source_value": 2 * k},
-        "1": {"source_value": 1 * k},
+        "0.1": {"legend_title": r"Source [$m^3/s$]", "source_value": k},
+        "0.2": {"source_value": 2 * k},
+        "0.5": {"source_value": 5 * k},
+        "1.0": {"source_value": 10 * k},
     }
 
     run_simulation_pairs_varying_parameters(params, update_params, Fracture)

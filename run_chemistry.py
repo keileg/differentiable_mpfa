@@ -1,14 +1,14 @@
 import logging
 
 import numpy as np
+import porepy as pp
+
 from grids import three_dimensional_cartesian
 from models import Chemistry
 from utility_functions import (
     plot_multiple_time_steps,
     run_simulation_pairs_varying_parameters,
 )
-
-import porepy as pp
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +36,7 @@ class ChemistryParameters:
                                 sd
                             ),
                             "equilibrium_constant_inv": np.ones(sd.num_cells)
-                            / self._equilibrium_constant,
+                            / self.params.get("equilibrium_constant", 0.1),
                         }
                     )
 
@@ -77,7 +77,19 @@ class ChemistryParameters:
             Dirichlet conditions: Pa = kg / m^1 / s^2
             Neumann conditions: m^3 / s
         """
-        return np.zeros(sd.num_faces)
+        return 0.0 * np.ones(sd.num_faces)
+
+    def _bc_values(self, sd: pp.Grid) -> np.ndarray:
+        """Homogeneous boundary values.
+
+        Units:
+            Dirichlet conditions: Pa = kg / m^1 / s^2
+            Neumann conditions: m^3 / s
+        """
+        vals = np.zeros(sd.num_faces)
+        all_bf, *_ = self._domain_boundary_sides(sd)
+        vals[all_bf] = 1e6
+        return vals
 
     def _stoichiometric_coefficient_a(self, sd: pp.Grid) -> int:
         """Stoichiometric coefficient for the chemical reaction
@@ -127,8 +139,8 @@ class ChemistryParameters:
         """
         rate = self.params.get("source_rate")
         source_vals = (
-            self._domain_center_source(sd, val=0.2 * rate)
-            * sd.cell_volumes
+            self._domain_center_source(sd, val=0.0 * rate)
+            # * sd.cell_volumes
             * self._density_a(sd)
         )
         return source_vals
@@ -144,7 +156,7 @@ class ChemistryParameters:
         Homogeneous values except at the domain center.
         """
         rate = self.params.get("source_rate")
-        source_vals = self._domain_center_source(sd, val=rate) * sd.cell_volumes
+        source_vals = self._domain_center_source(sd, val=rate)  # * sd.cell_volumes
         return source_vals
 
     def _initial_a(self, sd: pp.Grid) -> np.ndarray:
@@ -156,7 +168,7 @@ class ChemistryParameters:
         Returns:
             vals: np.ndarray of cell-wise concentration values
         """
-        return 0.5 * self._density_a(sd)
+        return 0.1 * np.ones(sd.num_cells)
 
     def _initial_c(self, sd: pp.Grid) -> np.ndarray:
         """Homogeneous initial values.
@@ -165,9 +177,13 @@ class ChemistryParameters:
             sd: pp.Grid of the subdomain.
 
         Returns:
-            vals: np.ndarray of cell-wise concentration values
+            vals: np.ndarray of cell-wise precipitate values.
+
+        Values should be in [0, reference_porosity], since the
+        porosity is
+            \phi = \phi_0 - c
         """
-        return 0.9 * self._density_c(sd)
+        return 0.04 * np.ones(sd.num_cells)
 
     def _initial_pressure(self, sd: pp.Grid) -> np.ndarray:
         """Homogeneous initial values.
@@ -178,7 +194,7 @@ class ChemistryParameters:
         Returns:
             vals: np.ndarray of cell-wise pressure values
         """
-        return 0 * np.ones(sd.num_cells)
+        return 1e6 * np.ones(sd.num_cells)
 
     def _reference_reaction_rate(self, sd: pp.Grid) -> np.ndarray:
         """Reference rate r_0 of the reaction term.
@@ -188,30 +204,10 @@ class ChemistryParameters:
 
         Returns:
             r_0: array of cell-wise rates. Homogeneous values
-                are definitely the obvious choice.
+                is the obvious choice.
         """
-        r_0 = self.params.get("reaction_rate", 1e-2) * np.ones(sd.num_cells)
+        r_0 = self.params["reaction_rate"] * np.ones(sd.num_cells)
         return r_0
-
-    def after_newton_convergence(
-        self, solution: np.ndarray, errors: float, iteration_counter: int
-    ) -> None:
-        super().after_newton_convergence(solution, errors, iteration_counter)
-        self._adjust_time_step()
-
-    def after_newton_failure(
-        self, solution: np.ndarray, errors: float, iteration_counter: int
-    ) -> None:
-        super().after_newton_failure(solution, errors, iteration_counter)
-        self._adjust_time_step()
-
-    def _adjust_time_step(self):
-        if self.time_index < self.params["n_time_steps"] - 1:
-            self.time_step *= 2
-        else:
-            self.time_step = self.end_time - self.time + 1e-10
-        print(self.time_step)
-        self._ad.time_step._value = self.time_step
 
 
 class CombinedModel(ChemistryParameters, Chemistry):
@@ -219,30 +215,29 @@ class CombinedModel(ChemistryParameters, Chemistry):
 
 
 if __name__ == "__main__":
-    nc = 9
+    nc = 15
     params = {
         "use_tpfa": True,
         "grid_method": three_dimensional_cartesian,
         "plotting_file_name": "chemistry",
         "file_name": "chemistry",
-        "time_step": 5e-3,
-        "end_time": 5e-3,
+        "folder_name": "chemistry",
+        "time_manager": pp.TimeManager(schedule=[0, 1], dt_init=1, constant_dt=True),
         "n_cells": [nc, nc, nc],
         "compute_permeability_errors": False,
+        "reaction_rate": 2e-4,
+        "source_rate": -1e-4,
+        "n_time_steps": 1,
     }
 
     update_params = {
-        "3": {
+        "0": {
             "legend_title": r"Exponent $\eta$",
-            "reaction_rate": 2e1,
-            "source_rate": 1,
-            "n_time_steps": 1,
-            "permeability_exponent": 4,
+            "permeability_exponent": 0,
         },
-        "6": {"permeability_exponent": 8},
-        "9": {"permeability_exponent": 12},
-        "12": {"permeability_exponent": 16},
-        "15": {"permeability_exponent": 15},
+        "2": {"permeability_exponent": 2},
+        "5": {"permeability_exponent": 5},
+        "8": {"permeability_exponent": 8},
     }
     run_simulation_pairs_varying_parameters(params, update_params, CombinedModel)
 
