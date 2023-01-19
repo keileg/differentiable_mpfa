@@ -1,3 +1,4 @@
+import copy
 import pickle
 from typing import Dict, Tuple
 
@@ -151,18 +152,27 @@ def plot_convergence(
     plt.savefig(fname="images/residuals_" + m_nonlin.params["plotting_file_name"])
 
 
-# p_analytical = m_nonlin.p_analytical()
-#         e_nonlin = [
-#             np.linalg.norm(p_num - p_analytical) for p_num in m_nonlin._solutions
-#         ]
-#         e_lin = [np.linalg.norm(p_num - p_analytical) for p_num in m_lin._solutions]
-#
-#         plt.semilogy(iterations, e_lin, label="linear")
-#         plt.semilogy(iterations_nonl, e_nonlin, label="nonlinear")
-#         ax = plt.gca()
-#         ax.set_xlabel("Iteration")
-#         ax.set_ylabel("Error (not normalized)")
-#         plt.legend(fontsize=legend_fontsize)
+def domain_bounds_to_array(domain_bounds) -> np.ndarray:
+    """Obtain points defining the domain_bounds as a single array.
+
+    Parameters:
+        domain_bounds: Dictionary containing keys xmin and xmax and optionally
+            ymin, ymax, zmin, zmax.
+
+    Returns:
+        Bounds as an nd x 2 array. nd should be between 1 and 3.
+
+    """
+    pts = np.atleast_2d([[domain_bounds["xmin"], domain_bounds["xmax"]]])
+    if "ymin" in domain_bounds:
+        pts = np.vstack(
+            (pts, np.atleast_2d([[domain_bounds["ymin"], domain_bounds["ymax"]]]))
+        )
+    if "zmin" in domain_bounds:
+        pts = np.vstack(
+            (pts, np.atleast_2d([[domain_bounds["zmin"], domain_bounds["zmax"]]]))
+        )
+    return pts
 
 
 def run_simulation_pairs_varying_parameters(
@@ -170,7 +180,7 @@ def run_simulation_pairs_varying_parameters(
 ) -> None:
     """Run multiple pairs of simulations varying some parameters.
 
-    Args:
+    Parameters:
         params: Dictionary containing initial setup and run parameters
         update_params: Dictionary with keys identifying each simulation pair and
             values being dictionaries specifying the updates to the initial parameters.
@@ -183,16 +193,18 @@ def run_simulation_pairs_varying_parameters(
         update_params = {"hundred_cells": {"n_cells": [10, 10]},
                          "four_cells": {"n_cells": [2, 2]},
                          }
+
     """
     line_colors = ["blue", "orange", "green", "red", "purple", "brown"]
     i = 0
     plt.figure()
     for name, updates in update_params.items():
-        params.update(updates)
-        params["file_name"] = name
+        params_loc = copy.deepcopy(params)
+        params_loc.update(updates)
+        params_loc["file_name"] = name
         print("Running simulation named", name)
         update_params[name]["models"] = run_linear_and_nonlinear(
-            params, model_class, "tab:" + line_colors[i]
+            params_loc, model_class, "tab:" + line_colors[i]
         )
         i += 1
 
@@ -207,51 +219,12 @@ def plot_all_permeability_errors(update_params):
         i += 1
 
 
-def plot_multiple_time_steps(
-    updates: dict, n_steps: int, use_fn_label: bool = True, model_type: str = "both"
-):
-    """
-
-    Args:
-        updates: Dictionary with keys identifying the different simulations. For each key, updates[key]["models"]
-            contains a tuple of model instances resulting from simulations with and without full flux differentiation.
-        n_steps: Number of time steps
-        use_fn_label: Whether to use the file name as a label in the plots.
-        model_type: Which of the two model variants to plot results for. If specified as either "linear"
-            or "nonlinear", the other one is omitted.
-
-    Returns:
-
-    """
-
-    line_colors = ["blue", "orange", "green", "red", "purple", "brown"]
-
-    for time_step in range(n_steps):
-        plt.figure()
-        for i, name in enumerate(updates.keys()):
-            linear_model, nonlinear_model = updates[name]["models"]
-            if hasattr(nonlinear_model, "residual_list"):
-                nonlinear_model._residuals = nonlinear_model.residual_list[time_step]
-                linear_model._residuals = linear_model.residual_list[time_step]
-            nonlinear_model.params["plotting_file_name"] = (
-                linear_model.params["plotting_file_name"] + "_" + str(time_step)
-            )
-            plot_convergence(
-                nonlinear_model,
-                linear_model,
-                plot_errors=False,
-                color="tab:" + line_colors[i],
-                use_fn_label=use_fn_label,
-                model_type=model_type,
-            )
-
-
 def run_linear_and_nonlinear(
     params: Dict, model_class, plot_color=None, use_fn_label=True
 ) -> Tuple:
     """Run a pair of one linear and one nonlinear simulation.
 
-    Args:
+    Parameters:
         params: Setup and run parameters
         model_class: Model to be used for the simulations
         plot_color: Color for residual plots
@@ -261,13 +234,10 @@ def run_linear_and_nonlinear(
         nonlinear_model, linear_model
 
     """
-    params_linear = params.copy()
+    params_linear = copy.deepcopy(params)
     params_linear["use_linear_discretization"] = True
     linear_model = model_class(params_linear)
-    if "time_step" in linear_model.params:
-        run_method = pp.run_time_dependent_model
-    else:
-        run_method = pp.run_stationary_model
+    run_method = pp.run_time_dependent_model
     params["file_name"] += "_nonlinear"
     nonlinear_model = model_class(params)
     run_method(nonlinear_model, params)
@@ -281,134 +251,3 @@ def run_linear_and_nonlinear(
     )
 
     return linear_model, nonlinear_model
-
-
-def extract_line_solutions(model):
-    if not hasattr(model, "iteration_permeability"):
-        model.iteration_permeability = []
-        model.iteration_pressure = []
-        model.iteration_c = []
-    for sd, data in model.mdg.subdomains(return_data=True):
-        cell_inds = np.logical_and(
-            np.isclose(sd.cell_centers[2], 0.5), np.isclose(sd.cell_centers[1], 0.5)
-        )
-        if np.any(cell_inds):
-            model.iteration_permeability.append(model._permeability(sd)[cell_inds])
-            if hasattr(model, "variable"):
-                model.iteration_pressure.append(
-                    data[pp.STATE][pp.ITERATE][model.variable][cell_inds]
-                )
-            else:
-                model.iteration_pressure.append(
-                    data[pp.STATE][pp.ITERATE][model.scalar_variable][cell_inds]
-                )
-            if hasattr(model, "variable"):
-                model.iteration_c.append(
-                    data[pp.STATE][pp.ITERATE][model.component_c_variable][cell_inds]
-                )
-
-
-def plot_line_solutions(m_nonlin, m_lin, color=None, model_type="both", fname=None):
-    from_iteration = 0
-    vals_nonl = m_nonlin.iteration_pressure[from_iteration:]
-    vals_lin = m_lin.iteration_pressure[from_iteration:]
-    difference = True
-    for sd, data in m_lin.mdg.subdomains(return_data=True):
-        cell_inds = np.logical_and(
-            np.isclose(sd.cell_centers[2], 0.5), np.isclose(sd.cell_centers[1], 0.5)
-        )
-        x = sd.cell_centers[0, cell_inds]
-
-    c_min = np.inf
-    c_max = -np.inf
-    for i, perms in enumerate(vals_lin):
-        if difference:
-            c_min = min(c_min, np.min(perms - vals_lin[-1]))
-            c_max = max(c_max, np.max(perms - vals_lin[-1]))
-    if model_type != "linear":
-        for i, perms in enumerate(vals_nonl):
-            plt.figure()
-            if difference:
-                plt.plot(
-                    x,
-                    perms - vals_nonl[-1],
-                    label="Iteration " + str(i),
-                    ls="--",
-                    color=color,
-                    marker="x",
-                )
-            else:
-                plt.plot(
-                    x,
-                    perms,
-                    label="Iteration " + str(i),
-                    ls="--",
-                    color=color,
-                    marker="x",
-                )
-                plt.plot(
-                    x, vals_nonl[-1], label="Converged", ls=":", color=color, marker="x"
-                )
-
-            ax = plt.gca()
-            ax.set_xlabel("x coordinate")
-            ax.set_ylabel("K")
-            plt.ylim(c_min, c_max)
-            # Indicate convergence order
-            plt.legend(
-                title=m_lin.params.get("legend_title", None),
-                loc="upper right",
-                fontsize=legend_fontsize,
-            )
-            # if fname is None:
-            fname = (
-                "images/iterations/permeabilities_nonlinear"
-                + m_nonlin.params["plotting_file_name"]
-            )
-            plt.savefig(fname=fname + str(i))
-    # if not use_fn_label:
-    if model_type != "nonlinear":
-
-        for i, perms in enumerate(vals_lin):
-            plt.figure()
-            if difference:
-                plt.plot(
-                    x,
-                    perms - vals_lin[-1],
-                    label="Iteration " + str(i),
-                    ls="--",
-                    color=color,
-                    marker="x",
-                )
-            else:
-                plt.plot(
-                    x,
-                    perms,
-                    label="Iteration " + str(i),
-                    ls="-",
-                    color=color,
-                    marker="+",
-                )
-                plt.plot(
-                    x, vals_lin[-1], label="Converged", ls=":", color=color, marker="x"
-                )
-            ax = plt.gca()
-            ax.set_xlabel("x coordinate")
-            ax.set_ylabel("K")
-            plt.ylim(c_min, c_max)
-
-            # Indicate convergence order
-            plt.legend(
-                title=m_lin.params.get("legend_title", None),
-                loc="upper right",
-                fontsize=legend_fontsize,
-            )
-            # if fname is None:
-            fname = (
-                "images/iterations/permeabilities_linear"
-                + m_nonlin.params["plotting_file_name"]
-            )
-            plt.savefig(fname=fname + str(i))
-
-
-# Profiling: -B -m cProfile -o OutputFileName
