@@ -5,17 +5,15 @@ Model used is SquareRootPermeability2d:
     Incompressible flow with k(p)=sqrt(p) + k_0.
 Multiple runs with different grids.
 """
-from typing import Optional
+from typing import Callable
 
 import numpy as np
 import porepy as pp
-import scipy.sparse as sps
 
-from grids import (two_dimensional_cartesian,
-                   two_dimensional_cartesian_perturbed)
-from models import NonlinearIncompressibleFlow
-from utility_functions import (plot_all_permeability_errors,
-                               run_simulation_pairs_varying_parameters)
+from common_models import DataSaving, Geometry, SolutionStrategyMixin, solid_values
+from constitutive_laws import DifferentiatedDarcyLaw
+from grids import two_dimensional_cartesian, two_dimensional_cartesian_perturbed
+from utility_functions import run_simulation_pairs_varying_parameters
 
 
 def sqrt(var):
@@ -23,101 +21,81 @@ def sqrt(var):
 
 
 class SquareRootPermeability:
-    def _source(self, sd: pp.Grid) -> np.ndarray:
-        """Source term.
+    """Incompressible flow with :math:`k(p)=sqrt(p) + k_0`.
 
-        Units: m^3 / s
+    The model is defined on a unit square, with Dirichlet boundary conditions on all
+    boundaries. The source term is chosen such that the analytical solution is
+    :math:`x * y * (1 - x) * (1 - y) + p_0`, where :math:`p_0` is the pressure at the
+    boundary.
 
-        Args:
-            sd: Subdomain grid.
+    """
 
-        Returns:
-            Cell-wise source values.
-        """
-        x = sd.cell_centers[0]
-        val = (1 / 2 - x) * (1 - 2 * x) / sqrt(x * (1 - x) + 1) - 2 * sqrt(
-            x * (1 - x) + 1
-        )
-        return val * sd.cell_volumes
+    mdg: pp.MixedDimensionalGrid
+    """Mixed-dimensional grid."""
 
-    def p_analytical(self, sd: Optional[pp.Grid] = None) -> np.ndarray:
-        """Analytical pressure solution.
+    solid: pp.SolidConstants
+    """Solid parameters."""
 
-        Units: m^3 / s
+    fluid: pp.FluidConstants
+    """Fluid parameters."""
 
-        Args:
-            sd: Subdomain grid.
+    equation_system: pp.EquationSystem
+    """Equation system manager."""
 
-        Returns:
-            Cell-wise source values.
-        """
-        if sd is None:
-            sd = self.mdg.subdomains(dim=self.mdg.dim_max())[0]
-        x = sd.cell_centers[0]
-        return x * (1 - x)
+    pressure: Callable[[list[pp.Grid]], pp.ad.Operator]
+    """Pressure."""
 
-    def _permeability_function(self, pressure: np.ndarray) -> np.ndarray:
+    pressure_variable: str
+    """Name of the pressure variable."""
+
+    nd: int
+    """Number of dimensions."""
+
+    def permeability(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Pressure-dependent permeability function (not ad).
 
-        Args:
+        Parameters:
             pressure: Cell-wise pressure.
 
         Returns:
             Cell-wise permeability values.
 
         """
-        k0 = self.params["k0"]
-        val = np.sqrt(pressure) + k0
+        k0 = pp.ad.Scalar(self.solid.permeability())
+        val = self.pressure(subdomains) ** (1 / 2) + k0
         return val
 
-    def _permeability_function_ad(self, pressure: pp.ad.Variable):
-        """Pressure-dependent permeability function.
-
-        Intended usage: Wrapping in pp.ad.Function.
-
-        Args:
-            pressure: Ad variable.
-
-        Returns:
-            Ad_array
-
-        """
-        val = np.sqrt(pressure.val) + self.params["k0"]
-        diff = 0.5 / np.sqrt(pressure.val)
-        jac = pressure.jac.copy()
-        jac.data = diff
-        return pp.ad.Ad_array(val, jac)
-
-    def _initial_condition(self) -> None:
+    def initial_condition(self) -> None:
         """Set initial guess for the variables."""
+        super().initial_condition()
         vals = np.empty(0)
         for sd in self.mdg.subdomains():
-            vals = np.hstack((vals, self._initial_pressure(sd)))
-        self.dof_manager.distribute_variable(vals)
-        self.dof_manager.distribute_variable(vals, to_iterate=True)
+            vals = np.hstack((vals, self.initial_pressure(sd)))
+        self.equation_system.set_variable_values(
+            vals, [self.pressure_variable], to_state=True, to_iterate=True
+        )
 
-    def _initial_pressure(self, sd: pp.Grid):
-        val = self.p_analytical(sd) / 2  # (10.1 - np.random.rand(sd.num_cells) / 5)
-        # val = np.ones(sd.num_cells) / 1
+    def initial_pressure(self, sd: pp.Grid):
+        val = self.p_analytical(sd) / 2
         return val
 
-
-class SquareRootPermeability2d(SquareRootPermeability):
-    def _source(self, sd: pp.Grid) -> np.ndarray:
+    def fluid_source(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Source term.
 
         Units: m^3 / s
 
-        Args:
+        Parameters:
             sd: Subdomain grid.
 
         Returns:
             Cell-wise source values.
+
         """
+        sd = subdomains[0]
         x = sd.cell_centers[0]
         y = sd.cell_centers[1]
-        k0 = self.params["k0"]
-        p0 = self.params["p0"]
+        k0 = self.solid.permeability()
+        p0 = self.fluid.pressure()
         val = (
             -2 * x * (1 - x) * sqrt(k0 + x * y * (1 - x) * (1 - y) + p0)
             - 2 * y * (1 - y) * sqrt(k0 + x * y * (1 - x) * (1 - y) + p0)
@@ -129,80 +107,108 @@ class SquareRootPermeability2d(SquareRootPermeability):
             / sqrt(k0 + x * y * (1 - x) * (1 - y) + p0)
         )
 
-        return -val * sd.cell_volumes
+        source = pp.wrap_as_ad_array(-val * sd.cell_volumes, name="source")
+        return source
 
     def p_analytical(self, sd=None):
         """Analytical pressure solution.
 
-        Units: m^3 / s
+        Units: Pa.
 
-        Args:
+        Parameters:
             sd: Subdomain grid.
 
         Returns:
-            Cell-wise source values.
+            Cell-wise analytical pressure values.
+
         """
         if sd is None:
             sd = self.mdg.subdomains(dim=self.mdg.dim_max())[0]
         x = sd.cell_centers[0]
         y = sd.cell_centers[1]
-        return x * y * (1 - x) * (1 - y) + self.params["p0"]
+        return x * y * (1 - x) * (1 - y) + self.fluid.pressure()
 
-    def _bc_values(self, sd: pp.Grid) -> np.ndarray:
+    def bc_values_darcy(self, subdomains: list[pp.Grid]) -> pp.ad.Array:
         """Boundary pressure values.
 
-        Args:
+        Parameters:
             sd: Subdomain grid.
 
         Returns:
             Face-wise boundary pressure values.
+
         """
-        val = np.zeros(sd.num_faces)
-        faces, *_ = self._domain_boundary_sides(sd)
-        val[faces] = self.params["p0"]
-        return val
+        if len(subdomains) == 0:
+            return pp.wrap_as_ad_array(0, size=0)
+        values = []
+        for sd in subdomains:
+            val = np.zeros(sd.num_faces)
+            faces, *_ = self.domain_boundary_sides(sd)
+            val[faces] = self.fluid.pressure()
+            values.append(val)
+        bc_values = pp.wrap_as_ad_array(np.concatenate(values), name="bc_values")
+        return bc_values
 
 
-class CombinedModel(SquareRootPermeability2d, NonlinearIncompressibleFlow):
+class CombinedModel(
+    SquareRootPermeability,
+    Geometry,
+    DataSaving,
+    SolutionStrategyMixin,
+    DifferentiatedDarcyLaw,
+    pp.fluid_mass_balance.SinglePhaseFlow,
+):
     pass
 
 
 if __name__ == "__main__":
+    solid_values["permeability"] = 1e-2
     params = {
         "use_ad": True,
         "use_tpfa": False,
         "grid_method": two_dimensional_cartesian,
         "n_cells": [100, 100],
-        "k0": 1e-2,
-        "p0": 0.0,
         "compute_permeability_errors": False,
+        "material_constants": {"solid": pp.SolidConstants(solid_values)},
     }
     update_params_small = {
-        "1": {"legend_title": "# cells", "n_cells": [3, 4]},
+        "1": {
+            "legend_title": "# cells",
+            "n_cells": [3, 4],
+            "plotting_file_name": "verification_small",
+        },
+        "2": {
+            "n_cells": [5, 6],
+            "plotting_file_name": "verification_small",
+        },
     }
     update_params_cell_number = {
         "100": {
             "legend_title": "# cells",
             "max_iterations": 40,
             "n_cells": [10, 10],
-            "plotting_file_name": "verification_cell_number_converging",
             "max_iterations": 40,
         },
         "2500": {"n_cells": [25, 25]},
         "10k": {"n_cells": [100, 100]},
         # "160k": {"n_cells": [400, 400]},  # TODO: Increase to 1m
     }
+    for k in update_params_cell_number.keys():
+        update_params_cell_number[k]["plotting_file_name"] = "verification_cell_number"
     update_params_cell_number_not_converging = {
         "100": {
             "legend_title": "# cells",
             "max_iterations": 24,
             "n_cells": [10, 10],
-            "plotting_file_name": "verification_cell_number",
             "compute_permeability_errors": True,
         },
         "2500": {"n_cells": [25, 25]},
         "10k": {"n_cells": [100, 100]},
     }
+    for k in update_params_cell_number_not_converging.keys():
+        update_params_cell_number_not_converging[k][
+            "plotting_file_name"
+        ] = "verification_cell_number"
 
     update_params_mesh_type = {
         "Tetrahedra MP": {
@@ -213,7 +219,6 @@ if __name__ == "__main__":
             },
             "legend_title": "Scheme",
             "legend_label": "MP",
-            "plotting_file_name": "verification_mesh_and_discretization",
         },
         "Tetrahedra TP": {
             "use_tpfa": True,
@@ -230,10 +235,13 @@ if __name__ == "__main__":
             "legend_label": "TP",
         },
     }
+    for k in update_params_mesh_type.keys():
+        update_params_mesh_type[k][
+            "plotting_file_name"
+        ] = "verification_mesh_and_discretization"
     update_params_anisotropy = {
         "50": {
             "use_tpfa": True,
-            "plotting_file_name": "verification_anisotropy",
             "legend_title": "# cells y",
             "grid_method": two_dimensional_cartesian_perturbed,
             "n_cells": [50, 50],
@@ -241,14 +249,17 @@ if __name__ == "__main__":
         "200": {"n_cells": [50, 200]},
         "1000": {"n_cells": [50, 1000]},
     }
+    for k in update_params_anisotropy.keys():
+        update_params_anisotropy[k]["plotting_file_name"] = "verification_anisotropy"
 
     all_updates = [
-        # update_params_cell_number,
-        # update_params_cell_number_not_converging,
+        # update_params_small,
+        update_params_cell_number,
+        update_params_cell_number_not_converging,
         update_params_mesh_type,
-        # update_params_anisotropy,
+        update_params_anisotropy,
     ]
     for up in all_updates:
         run_simulation_pairs_varying_parameters(params, up, CombinedModel)
 
-    plot_all_permeability_errors(update_params_cell_number_not_converging)
+    # plot_all_permeability_errors(update_params_cell_number_not_converging)

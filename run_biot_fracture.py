@@ -6,59 +6,22 @@ Parameters and run script for Section 4.2.3
 import numpy as np
 import porepy as pp
 
+from common_models import Poromechanics, solid_values
 from grids import horizontal_fracture_3d
-from models import BiotNonlinearTpfa
-from utility_functions import (plot_multiple_time_steps,
-                               run_simulation_pairs_varying_parameters)
-
-
-class MixedDimParameters:
-    def _initial_gap(self, sd: pp.Grid) -> np.ndarray:
-        """Initial value for the fracture gap.
-
-        Args:
-            sd: Fracture subdomain grid.
-
-        Returns:
-            Cell-wise values.
-
-        """
-        return 2e-2 * np.ones(sd.num_cells)
-
-    def _source_scalar(self, sd: pp.Grid) -> np.ndarray:
-        """Injection at center of fracture.
-
-        Args:
-            sd: Subdomain grid.
-
-        Returns:
-            Cell-wise source value.
-
-        """
-        val = np.zeros(sd.num_cells)
-        if sd.dim == self.nd - 1:
-            val = self._domain_center_source(sd, val=self.params["source_value"])
-        return val
-
-    def _biot_alpha(self, sd: pp.Grid) -> np.ndarray:
-        """Biot coefficient.
-
-        Args:
-            sd: Grid.
-
-        Returns:
-            Cell-wise Biot coefficient.
-
-        """
-        return self.params["biot_alpha"] * np.ones(sd.num_cells)
-
-
-class Fracture(MixedDimParameters, BiotNonlinearTpfa):
-    pass
-
+from utility_functions import run_simulation_pairs_varying_parameters
 
 if __name__ == "__main__":
     nc = 15
+
+    solid_values.update(
+        {
+            "permeability": 1e-5,
+            "biot_coefficient": 0.2,
+            "residual_aperture": 1e-1,
+        }
+    )
+    solid = pp.SolidConstants(solid_values)
+    fluid = pp.FluidConstants({"compressibility": 1e-3})
     params = {
         "use_tpfa": True,
         "time_manager": pp.TimeManager(
@@ -69,23 +32,16 @@ if __name__ == "__main__":
         "folder_name": "biot_fracture",
         "grid_method": horizontal_fracture_3d,
         "mesh_args": np.array([nc, nc, nc - 1]),
-        "n_time_steps": 1,
-        "biot_alpha": 0.2,
         "nl_convergence_tol": 1e-12,
+        "material_constants": {"solid": solid, "fluid": fluid},
     }
-    k = 1e-1
+    k = 1e1
     update_params = {
-        "0.1": {"legend_title": r"Source [$m^3/s$]", "source_value": k},
-        "0.2": {"source_value": 2 * k},
-        "0.5": {"source_value": 5 * k},
-        "1.0": {"source_value": 10 * k},
+        "10": {"legend_title": r"Source [$m^3/s$]", "fluid_source_value": k},
+        "20": {"fluid_source_value": 2 * k},
+        "30": {"fluid_source_value": 3 * k},
+        "40": {"fluid_source_value": 4 * k},
     }
 
-    run_simulation_pairs_varying_parameters(params, update_params, Fracture)
-    plot_multiple_time_steps(updates=update_params, n_steps=params["n_time_steps"])
-
-    for k in update_params.keys():
-        update_params[k]["models"][0].params["plotting_file_name"] += "_linear"
-    plot_multiple_time_steps(
-        updates=update_params, n_steps=params["n_time_steps"], model_type="linear"
-    )
+    run_simulation_pairs_varying_parameters(params, update_params, Poromechanics)
+    h = 1

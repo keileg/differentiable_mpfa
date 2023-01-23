@@ -12,24 +12,25 @@ from typing import Any, Callable, Tuple
 
 import numpy as np
 import porepy as pp
-from constitutive_laws import DifferentiatedDarcyLaw, PoromechanicsPermeability
 
-from utility_functions import (
-    domain_bounds_to_array,
-    load_converged_permeability,
+from constitutive_laws import (
+    DifferentiatedDarcyLaw,
+    DomainCenterSource,
+    PoromechanicsPermeability,
 )
 from grids import Geometry
+from utility_functions import load_converged_permeability
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
 solid_values = {
-    "permeability": 1e-5,
+    "permeability": 1e-4,
     "density": 1,
     "porosity": 0.05,
-    "shear_modulus": 1e1,
-    "lame_lambda": 1e1,
+    "shear_modulus": 1e3,
+    "lame_lambda": 1e3,
 }
 
 
@@ -254,33 +255,6 @@ class SolutionStrategyMixin:
         logger.info(f"Newton iterations did not converge to tolerance {tol}.")
         self.save_data_time_step()
 
-    def domain_center_source(self, sd: pp.Grid, val: float) -> np.ndarray:
-        """Source value at the center of a subdomain.
-
-
-        Parameters:
-            sd: Subdomain grid.
-            val: Value to be assigned.
-
-        Returns:
-            Cell-wise source values. Zeros except at the entry corresponding to the cell
-            closest to the subdomain's center.
-
-        """
-        vals = np.zeros(sd.num_cells)
-        domain_corners = domain_bounds_to_array(self.domain_bounds)
-
-        # Ensure three coordinates.
-        pt = np.zeros((3, 1))
-        # Compute domain center
-        pt[: self.nd] = np.reshape(np.mean(domain_corners, axis=1), (self.nd, 1))
-        # Translate a tiny distance to make determination unique in case of even
-        # number of Cartesian cells
-        pt -= 1e-10
-        ind = sd.closest_cell(pt)
-        vals[ind[0]] = val
-        return vals
-
     def permeability_argument(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
         """Permeability argument for the Darcy flux.
 
@@ -297,28 +271,13 @@ class SolutionStrategyMixin:
         return self.pressure(subdomains)
 
 
-class SolutionStrategyPoromechanics:
-    def initial_condition(self):
-        """Initial condition for all primary variables and the parameter representing the
-        secondary flux variable (needs to be present for first call to upwind discretization).
-
-        """
-        super().initial_condition()
-        for sd, data in self.mdg.subdomains(return_data=True):
-            state = {
-                self.pressure_variable: self.fluid.pressure() * np.ones(sd.num_cells),
-            }
-            data[pp.STATE].update(state)
-            data[pp.STATE][pp.ITERATE].update(state.copy())
-
-
 class Poromechanics(
     DataSaving,
     Geometry,
     PoromechanicsPermeability,
     DifferentiatedDarcyLaw,
     SolutionStrategyMixin,
-    SolutionStrategyPoromechanics,
+    DomainCenterSource,
     pp.poromechanics.Poromechanics,
 ):
     """Poromechanics model with differentiated Darcy law.

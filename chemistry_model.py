@@ -1,18 +1,19 @@
 from __future__ import annotations
+
 import copy
+from typing import Callable, Optional
 
-from typing import Callable, Optional, Union
-
+import numpy as np
+import porepy as pp
 from pypardiso import spsolve
+
+from common_models import DataSaving, Geometry, SolutionStrategyMixin
 from constitutive_laws import (
     DifferentiatedDarcyLaw,
-    PowerLawPermeability,
     DissolutionReaction,
+    PowerLawPermeability,
     PrecipitationPorosity,
 )
-from common_models import DataSaving, Geometry, SolutionStrategyMixin
-import porepy as pp
-import numpy as np
 
 
 class SolutionStrategyChemistry(pp.SolutionStrategy):
@@ -122,9 +123,9 @@ class ComponentConstants(pp.MaterialConstants):
     def __init__(self, constants: Optional[dict[str, pp.number]] = None):
         # Default values, sorted alphabetically
         default_constants: dict[str, pp.number] = {
-            "reaction_rate": 1e-0,
-            "precipitate_fraction": 4e-2,
-            "solute_fraction": 1e-1,
+            "reaction_rate": 1e-1,
+            "precipitate_fraction": 4e-1,
+            "solute_fraction": 2e-1,
             "equilibrium_constant": 1e-1,
         }
         if constants is not None:
@@ -324,7 +325,7 @@ class BoundaryConditionsChemistry:
             boundary_faces = self.domain_boundary_sides(sd).all_bf
             # Append to list of boundary values
             vals = np.zeros(sd.num_faces)
-            vals[boundary_faces] = self.component.solute_fraction() / 2
+            vals[boundary_faces] = self.component.solute_fraction() * 2
             bc_values.append(vals)
         # Concatenate to single array and wrap as ad.Array
         # We have forced the type of bc_values_array to be an ad.Array, but mypy does

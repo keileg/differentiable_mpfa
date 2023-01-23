@@ -5,7 +5,7 @@ Each function constructs and returns a mixed-dimensional grid and a (unitary) do
 """
 
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import porepy as pp
@@ -89,3 +89,26 @@ def horizontal_fracture_3d(params):
         x_coords=endpoints,
         y_coords=endpoints,
     )
+
+
+class Geometry(pp.models.geometry.ModelGeometry):
+    """Mixin class for geometry."""
+
+    params: dict[str, Any]
+    """Parameters for the model."""
+
+    def set_md_grid(self) -> None:
+        """Create the mixed-dimensional grid.
+
+        A unit square grid with no fractures is assigned by default.
+
+        The method assigns the following attributes to self:
+            mdg (pp.MixedDimensionalGrid): The produced mixed-dimensional grid.
+            box (dict): The bounding box of the domain, defined through minimum and
+                maximum values in each dimension.
+        """
+        mdg, domain = self.params["grid_method"](self.params)
+        self.domain_bounds: dict = domain
+        self.mdg: pp.MixedDimensionalGrid = mdg
+        self.mdg.compute_geometry()
+        self.nd = self.mdg.dim_max()

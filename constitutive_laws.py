@@ -1,7 +1,9 @@
 from typing import Any, Callable
+
+import numpy as np
 import porepy as pp
 
-from chemistry_model import ComponentConstants
+from utility_functions import domain_bounds_to_array
 
 
 class DifferentiatedDarcyLaw(pp.constitutive_laws.DarcysLaw):
@@ -186,7 +188,7 @@ class DissolutionReaction:
     """Constitutive laws for the chemistry model."""
 
     solid: pp.SolidConstants
-    component: ComponentConstants
+    component: pp.MaterialConstants
     porosity: Callable[[list[pp.Grid]], pp.ad.Operator]
     component_a: Callable[[list[pp.Grid]], pp.ad.Operator]
 
@@ -231,3 +233,55 @@ class DissolutionReaction:
         return pp.ad.Scalar(
             self.component.equilibrium_constant(), name="equilibrium_constant"
         )
+
+
+class DomainCenterSource:
+    def domain_center_source(self, sd: pp.Grid, val: float) -> np.ndarray:
+        """Source value at the center of a subdomain.
+
+
+        Parameters:
+            sd: Subdomain grid.
+            val: Value to be assigned.
+
+        Returns:
+            Cell-wise source values. Zeros except at the entry corresponding to the cell
+            closest to the subdomain's center.
+
+        """
+        vals = np.zeros(sd.num_cells)
+        domain_corners = domain_bounds_to_array(self.domain_bounds)
+
+        # Ensure three coordinates.
+        pt = np.zeros((3, 1))
+        # Compute domain center
+        pt[: self.nd] = np.reshape(np.mean(domain_corners, axis=1), (self.nd, 1))
+        # Translate a tiny distance to make determination unique in case of even
+        # number of Cartesian cells
+        pt -= 1e-10
+        ind = sd.closest_cell(pt)
+        vals[ind[0]] = val
+        return vals
+
+    def fluid_source(self, subdomains: list[pp.Grid]) -> pp.ad.Operator:
+        """Source term.
+
+        Units: m^3 / s
+
+        Parameters:
+            sd: Subdomain grid.
+
+        Returns:
+            Cell-wise source values.
+
+        """
+        vals = []
+        for sd in subdomains:
+            if sd.dim == self.mdg.dim_min():
+                val = self.params["fluid_source_value"]
+                val *= self.fluid.density()
+                vals.append(sd.cell_volumes * self.domain_center_source(sd, val))
+            else:
+                vals.append(np.zeros(sd.num_cells))
+            source = pp.wrap_as_ad_array(np.concatenate(vals), name="source")
+        return super().fluid_source(subdomains) + source
