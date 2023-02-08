@@ -13,7 +13,10 @@ import porepy as pp
 from common_models import DataSaving, Geometry, SolutionStrategyMixin, solid_values
 from constitutive_laws import DifferentiatedDarcyLaw
 from grids import two_dimensional_cartesian, two_dimensional_cartesian_perturbed
-from utility_functions import run_simulation_pairs_varying_parameters
+from utility_functions import (
+    plot_all_permeability_errors,
+    run_simulation_pairs_varying_parameters,
+)
 
 
 def sqrt(var):
@@ -25,8 +28,7 @@ class SquareRootPermeability:
 
     The model is defined on a unit square, with Dirichlet boundary conditions on all
     boundaries. The source term is chosen such that the analytical solution is
-    :math:`x * y * (1 - x) * (1 - y) + p_0`, where :math:`p_0` is the pressure at the
-    boundary.
+    :math:`x * y * (1 - x) * (1 - y)`.
 
     """
 
@@ -95,16 +97,15 @@ class SquareRootPermeability:
         x = sd.cell_centers[0]
         y = sd.cell_centers[1]
         k0 = self.solid.permeability()
-        p0 = self.fluid.pressure()
         val = (
-            -2 * x * (1 - x) * sqrt(k0 + x * y * (1 - x) * (1 - y) + p0)
-            - 2 * y * (1 - y) * sqrt(k0 + x * y * (1 - x) * (1 - y) + p0)
+            -2 * x * (1 - x) * sqrt(k0 + x * y * (1 - x) * (1 - y))
+            - 2 * y * (1 - y) * sqrt(k0 + x * y * (1 - x) * (1 - y))
             + (-x * y * (1 - x) + x * (1 - x) * (1 - y))
             * (-x * y * (1 - x) / 2 + x * (1 - x) * (1 - y) / 2)
-            / sqrt(k0 + x * y * (1 - x) * (1 - y) + p0)
+            / sqrt(k0 + x * y * (1 - x) * (1 - y))
             + (-x * y * (1 - y) + y * (1 - x) * (1 - y))
             * (-x * y * (1 - y) / 2 + y * (1 - x) * (1 - y) / 2)
-            / sqrt(k0 + x * y * (1 - x) * (1 - y) + p0)
+            / sqrt(k0 + x * y * (1 - x) * (1 - y))
         )
 
         source = pp.wrap_as_ad_array(-val * sd.cell_volumes, name="source")
@@ -126,7 +127,7 @@ class SquareRootPermeability:
             sd = self.mdg.subdomains(dim=self.mdg.dim_max())[0]
         x = sd.cell_centers[0]
         y = sd.cell_centers[1]
-        return x * y * (1 - x) * (1 - y) + self.fluid.pressure()
+        return x * y * (1 - x) * (1 - y)
 
     def bc_values_darcy(self, subdomains: list[pp.Grid]) -> pp.ad.Array:
         """Boundary pressure values.
@@ -148,6 +149,15 @@ class SquareRootPermeability:
             values.append(val)
         bc_values = pp.wrap_as_ad_array(np.concatenate(values), name="bc_values")
         return bc_values
+
+    def save_data_iteration(self) -> None:
+        """Save data for the current iteration."""
+        super().save_data_iteration()
+        # Store all iterations of the permeability
+        if not hasattr(self, "_permeabilities_nd"):
+            self._permeabilities_nd = []
+        for _, data in self.mdg.subdomains(return_data=True):
+            self._permeabilities_nd.append(data[pp.STATE]["permeability"])
 
 
 class CombinedModel(
@@ -171,50 +181,23 @@ if __name__ == "__main__":
         "compute_permeability_errors": False,
         "material_constants": {"solid": pp.SolidConstants(solid_values)},
     }
-    update_params_small = {
-        "1": {
-            "legend_title": "# cells",
-            "n_cells": [3, 4],
-            "plotting_file_name": "verification_small",
-        },
-        "2": {
-            "n_cells": [5, 6],
-            "plotting_file_name": "verification_small",
-        },
-    }
     update_params_cell_number = {
         "100": {
             "legend_title": "# cells",
-            "max_iterations": 40,
-            "n_cells": [10, 10],
-            "max_iterations": 40,
-        },
-        "2500": {"n_cells": [25, 25]},
-        "10k": {"n_cells": [100, 100]},
-        # "160k": {"n_cells": [400, 400]},  # TODO: Increase to 1m
-    }
-    for k in update_params_cell_number.keys():
-        update_params_cell_number[k]["plotting_file_name"] = "verification_cell_number"
-    update_params_cell_number_not_converging = {
-        "100": {
-            "legend_title": "# cells",
-            "max_iterations": 24,
             "n_cells": [10, 10],
             "compute_permeability_errors": True,
         },
         "2500": {"n_cells": [25, 25]},
         "10k": {"n_cells": [100, 100]},
     }
-    for k in update_params_cell_number_not_converging.keys():
-        update_params_cell_number_not_converging[k][
-            "plotting_file_name"
-        ] = "verification_cell_number"
+    for k in update_params_cell_number.keys():
+        update_params_cell_number[k]["plotting_file_name"] = "verification_cell_number"
 
     update_params_mesh_type = {
         "Tetrahedra MP": {
             "simplex": True,
             "mesh_args": {
-                "mesh_size_bound": 3e-2,  # 92562 at 5e-3.
+                "mesh_size_bound": 3e-2,
                 "mesh_size_frac": 1e-3,
             },
             "legend_title": "Scheme",
@@ -253,13 +236,11 @@ if __name__ == "__main__":
         update_params_anisotropy[k]["plotting_file_name"] = "verification_anisotropy"
 
     all_updates = [
-        # update_params_small,
         update_params_cell_number,
-        update_params_cell_number_not_converging,
         update_params_mesh_type,
         update_params_anisotropy,
     ]
     for up in all_updates:
         run_simulation_pairs_varying_parameters(params, up, CombinedModel)
 
-    # plot_all_permeability_errors(update_params_cell_number_not_converging)
+    plot_all_permeability_errors(update_params_cell_number)

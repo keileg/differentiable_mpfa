@@ -93,22 +93,6 @@ class DataSaving(pp.viz.data_saving_model_mixin.DataSavingMixin):
         """Export the model state at a given time step."""
         for sd, data in self.mdg.subdomains(return_data=True):
             self._store_secondary_values_in_state(sd, data)
-
-            perm_errors = np.inf
-            do_compute = self.params.get("compute_permeability_errors", True)
-            if (
-                do_compute
-                and "converged_permeability" in data[pp.PARAMETERS][self.darcy_keyword]
-            ):
-                perm_errors = np.linalg.norm(
-                    data[pp.PARAMETERS][self.darcy_keyword]["converged_permeability"]
-                    - data[pp.STATE]["permeability"]
-                ) / np.sqrt(data[pp.STATE]["permeability"].size)
-            if sd.dim == self.nd:
-                self._permeability_errors_nd.append(perm_errors)
-            else:
-                self._permeability_errors_frac.append(perm_errors)
-
         self._residuals.append(self._residual())
         sol = self.equation_system.get_variable_values()
         self._solutions.append(sol)

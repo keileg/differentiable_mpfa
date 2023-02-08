@@ -49,16 +49,17 @@ def load_converged_permeability(model):
 
 
 def plot_permeability_errors(
-    m_nonlin, m_lin, color=None, nd=True, use_fn_label=True, model_type="both"
+    m_nonlin, m_lin, color=None, use_fn_label=True, model_type="both"
 ):
-    if nd:
-        vals_lin = m_lin._permeability_errors_nd[:-1]
-        vals_nonlin = m_nonlin._permeability_errors_nd[:-1]
-    else:
-        vals_lin = m_lin._permeability_errors_frac[:-1]
-        vals_nonlin = m_nonlin._permeability_errors_frac[:-1]
+    vals_lin = m_lin._permeabilities_nd[:-1]
+    k_converged = m_nonlin._permeabilities_nd[-1]
+    diffs_lin = k_converged - np.vstack(vals_lin)
+    perm_errors_lin = np.linalg.norm(diffs_lin, axis=1) / np.sqrt(k_converged.size)
+    vals_nonl = m_nonlin._permeabilities_nd[:-1]
+    diffs_nonl = k_converged - np.vstack(vals_nonl)
+    perm_errors_nonl = np.linalg.norm(diffs_nonl, axis=1) / np.sqrt(k_converged.size)
     iterations = np.arange(1, 1 + len(vals_lin))
-    iterations_nonl = np.arange(1, 1 + len(vals_nonlin))
+    iterations_nonl = np.arange(1, 1 + len(vals_nonl))
     if use_fn_label:
         label = m_lin.params["file_name"]
     else:
@@ -66,7 +67,7 @@ def plot_permeability_errors(
     if model_type != "linear":
         plt.semilogy(
             iterations_nonl,
-            vals_nonlin,
+            perm_errors_nonl,
             label=label,
             ls="--",
             color=color,
@@ -76,7 +77,7 @@ def plot_permeability_errors(
         label = "non-diff"
     if model_type != "nonlinear":
         plt.semilogy(
-            iterations, vals_lin, label=label, ls="-", color=color, linewidth=2
+            iterations, perm_errors_lin, label=label, ls="-", color=color, linewidth=2
         )
     ax = plt.gca()
     ax.set_xlabel("Iteration")
@@ -90,8 +91,6 @@ def plot_permeability_errors(
     )
     plt.tight_layout()
     fn_root = "images/permeability_errors_"
-    if not nd:
-        fn_root += "frac_"
     plt.savefig(fname=fn_root + m_nonlin.params["plotting_file_name"])
 
 
