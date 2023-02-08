@@ -123,10 +123,10 @@ class ComponentConstants(pp.MaterialConstants):
     def __init__(self, constants: Optional[dict[str, pp.number]] = None):
         # Default values, sorted alphabetically
         default_constants: dict[str, pp.number] = {
-            "reaction_rate": 1e-1,
-            "precipitate_fraction": 4e-1,
+            "reaction_rate": 4e-1,
+            "precipitate_fraction": 2e-1,
             "solute_fraction": 2e-1,
-            "equilibrium_constant": 1e-1,
+            "equilibrium_constant": 2e-1,
         }
         if constants is not None:
             default_constants.update(constants)
